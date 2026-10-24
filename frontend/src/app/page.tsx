@@ -57,7 +57,8 @@ export default function App() {
         thickness: 8,
         holeDiameter: 6,
         edgeOffset: 10,
-      }
+      },
+      artifacts: null,
     },
   ]);
 
@@ -87,6 +88,31 @@ export default function App() {
     const boundingBox = `${cadParams.length} x ${cadParams.width} x ${cadParams.thickness} ${units}`;
     return { volume, mass, boundingBox };
   }, [cadParams, units]);
+
+  const generatedScript = `from build123d import Align, Box, Cylinder, Pos, export_step, export_stl
+
+# Baseplate parameters for ${activeVersion}
+length = ${cadParams.length}  # ${units}
+width = ${cadParams.width}  # ${units}
+thickness = ${cadParams.thickness}  # ${units}
+hole_diameter = ${cadParams.holeDiameter}  # ${units}
+edge_offset = ${cadParams.edgeOffset}  # ${units}
+
+result = Box(length, width, thickness, align=(Align.CENTER, Align.CENTER, Align.CENTER))
+hole_x = length / 2 - edge_offset
+hole_y = width / 2 - edge_offset
+for x in (-hole_x, hole_x):
+    for y in (-hole_y, hole_y):
+        cutter = Pos(x, y, 0) * Cylinder(
+            hole_diameter / 2,
+            thickness + 2,
+            align=(Align.CENTER, Align.CENTER, Align.CENTER),
+        )
+        result -= cutter
+
+export_step(result, "baseplate.step")
+export_stl(result, "baseplate.stl")
+`;
 
   // Auto-scroll Chat
   useEffect(() => {
@@ -180,17 +206,19 @@ export default function App() {
         edgeOffset: result.cad_params.edge_offset,
       };
       const version = `v1.${history.length}`;
-      setCadParams(returnedParams);
-      setModelArtifacts({
+      const generatedArtifacts = {
         stlUrl: result.files.stl_url,
         stepUrl: result.files.step_url,
-      });
+      };
+      setCadParams(returnedParams);
+      setModelArtifacts(generatedArtifacts);
       setHistory((previous) => [
         {
           version,
           title: query.slice(0, 24),
           time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           cadParams: returnedParams,
+          artifacts: generatedArtifacts,
         },
         ...previous,
       ]);
@@ -222,9 +250,17 @@ export default function App() {
     }
   };
 
-  const handleCopyCode = () => {
-    setCopiedCode(true);
-    setTimeout(() => setCopiedCode(false), 2000);
+  const [copyError, setCopyError] = useState(false);
+  const handleCopyCode = async () => {
+    try {
+      await navigator.clipboard.writeText(generatedScript);
+      setCopyError(false);
+      setCopiedCode(true);
+      window.setTimeout(() => setCopiedCode(false), 2000);
+    } catch {
+      setCopiedCode(false);
+      setCopyError(true);
+    }
   };
 
   const theme = {
@@ -403,7 +439,7 @@ export default function App() {
                     onClick={() => {
                       setActiveVersion(item.version);
                       setCadParams(item.cadParams);
-                      setModelArtifacts(null);
+                      setModelArtifacts(item.artifacts);
                     }}
                     className={`w-full p-1.5 rounded-lg text-left text-[11px] font-mono flex items-center justify-between border transition ${
                       activeVersion === item.version 
@@ -694,41 +730,23 @@ export default function App() {
                       <Terminal className="w-4 h-4 text-emerald-500" /> build123d Python B-Rep Script
                     </span>
                     <button
-                      onClick={handleCopyCode}
+                      onClick={() => void handleCopyCode()}
                       className="px-3 py-1.5 rounded-lg bg-emerald-500/20 text-emerald-600 dark:text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30 transition flex items-center gap-1.5 font-bold"
                     >
                       {copiedCode ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                      {copiedCode ? 'Copied!' : 'Copy Code'}
+                      {copyError ? 'Copy failed' : copiedCode ? 'Copied!' : 'Copy Code'}
                     </button>
                   </div>
+                  {copyError && (
+                    <p role="alert" className="text-rose-500">
+                      Clipboard access failed. Check your browser permissions and try again.
+                    </p>
+                  )}
 
                   <pre className={`p-4 rounded-xl border leading-relaxed overflow-x-auto ${
                     darkMode ? 'bg-slate-900 border-slate-800 text-cyan-300' : 'bg-white border-slate-200 text-cyan-800 shadow-sm'
                   }`}>
-{`from build123d import Align, Box, Cylinder, Pos, export_step, export_stl
-
-# Baseplate parameters for ${activeVersion}
-length = ${cadParams.length}  # ${units}
-width = ${cadParams.width}  # ${units}
-thickness = ${cadParams.thickness}  # ${units}
-hole_diameter = ${cadParams.holeDiameter}  # ${units}
-edge_offset = ${cadParams.edgeOffset}  # ${units}
-
-result = Box(length, width, thickness, align=(Align.CENTER, Align.CENTER, Align.CENTER))
-hole_x = length / 2 - edge_offset
-hole_y = width / 2 - edge_offset
-for x in (-hole_x, hole_x):
-    for y in (-hole_y, hole_y):
-        cutter = Pos(x, y, 0) * Cylinder(
-            hole_diameter / 2,
-            thickness + 2,
-            align=(Align.CENTER, Align.CENTER, Align.CENTER),
-        )
-        result -= cutter
-
-export_step(result, "baseplate.step")
-export_stl(result, "baseplate.stl")
-`}
+{generatedScript}
                   </pre>
                 </div>
               </div>

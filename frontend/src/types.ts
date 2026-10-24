@@ -41,6 +41,7 @@ export interface ModelVersion {
   title: string;
   time: string;
   cadParams: CadParams;
+  artifacts: ModelArtifacts | null;
 }
 
 export type MaterialKey = 'steel' | 'aluminum' | 'polymer' | 'brass' | 'carbon';
