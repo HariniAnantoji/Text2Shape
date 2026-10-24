@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
 
 from cad_generator import BaseplateParams, generate_baseplate
+from prompt_parser import interpret_prompt
 
 app = FastAPI()
 
@@ -41,9 +42,10 @@ class GeneratedFiles(BaseModel):
 
 
 class GenerateResponse(BaseModel):
+    status: Literal["generated", "clarification", "unsupported"]
     message: str
     cad_params: BaseplateParams
-    files: GeneratedFiles
+    files: GeneratedFiles | None = None
 
 
 @app.get("/artifacts/{artifact_id}/{filename}", name="get_artifact")
@@ -63,9 +65,17 @@ def get_artifact(
 
 @app.post("/generate")
 def generate(request: GenerateRequest, http_request: Request) -> GenerateResponse:
+    interpretation = interpret_prompt(request.prompt, request.cad_params)
+    if interpretation.status != "generated":
+        return GenerateResponse(
+            status=interpretation.status,
+            message=interpretation.message,
+            cad_params=interpretation.cad_params,
+        )
+
     artifact_id = uuid4().hex
     artifacts = generate_baseplate(
-        request.cad_params,
+        interpretation.cad_params,
         ARTIFACTS_DIR / artifact_id,
     )
     files = GeneratedFiles(
@@ -86,7 +96,8 @@ def generate(request: GenerateRequest, http_request: Request) -> GenerateRespons
     )
 
     return GenerateResponse(
-        message=f'Generated a baseplate with four mounting holes for: "{request.prompt}".',
-        cad_params=request.cad_params,
+        status=interpretation.status,
+        message=interpretation.message,
+        cad_params=interpretation.cad_params,
         files=files,
     )

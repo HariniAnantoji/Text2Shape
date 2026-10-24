@@ -155,6 +155,23 @@ export default function App() {
       }
 
       const result: GenerateResponse = await response.json();
+      if (result.status !== 'generated') {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: nextMessageId.current++,
+            sender: 'ai',
+            text: result.message,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            version: null,
+          },
+        ]);
+        return;
+      }
+      if (!result.files?.stl_url || !result.files.step_url) {
+        throw new Error('API response is missing the generated STL or STEP file URL');
+      }
+
       const returnedParams: CadParams = {
         length: result.cad_params.length,
         width: result.cad_params.width,

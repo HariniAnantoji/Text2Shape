@@ -7,6 +7,7 @@ export interface CadParams {
 }
 
 export interface GenerateResponse {
+  status: 'generated' | 'clarification' | 'unsupported';
   message: string;
   cad_params: {
     length: number;
@@ -15,10 +16,10 @@ export interface GenerateResponse {
     hole_diameter: number;
     edge_offset: number;
   };
-  files: {
+  files?: {
     stl_url: string;
     step_url: string;
-  };
+  } | null;
 }
 
 export interface ModelArtifacts {

@@ -48,12 +48,15 @@ curl -X POST http://127.0.0.1:8000/generate \
   -d '{"prompt":"Create a baseplate","cad_params":{"length":100,"width":60,"thickness":8,"hole_diameter":6,"edge_offset":10}}'
 ```
 
-The CAD engine uses supplied parameters (or defaults); it does not infer
-dimensions from the prompt yet. Generated files are served locally through
-restricted `/artifacts/` URLs. The frontend loads the STL in the 3D viewport
-and provides a STEP download link. Local file storage is for development;
-configure managed storage such as S3 before deploying. Local browser requests
-are allowed from `http://localhost:3000`.
+The prompt parser extracts length, width, thickness, hole diameter, and edge
+offset, and applies edits to the submitted current parameters. Relative
+“thicker” and “thinner” requests change thickness by 2 mm unless an explicit
+amount is given. Ambiguous and unsupported prompts return a status and
+clarification message without generating new files. Generated files are
+served locally through restricted `/artifacts/` URLs. The frontend loads the
+STL in the 3D viewport and provides a STEP download link. Local file storage
+is for development; configure managed storage such as S3 before deploying.
+Local browser requests are allowed from `http://localhost:3000`.
 
 ## Baseplate CAD tests
 
