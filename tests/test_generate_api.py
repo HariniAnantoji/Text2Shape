@@ -23,7 +23,7 @@ class GenerateEndpointTests(unittest.TestCase):
         response = self.client.post(
             "/generate",
             json={
-                "prompt": "A baseplate",
+                "prompt": "Create a 120 x 80 mm baseplate with 8 mm holes",
                 "cad_params": {
                     "length": 120,
                     "width": 80,
@@ -36,6 +36,8 @@ class GenerateEndpointTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
+        self.assertEqual(body["status"], "generated")
+        self.assertIsNotNone(body["files"])
         self.register_generated_file_cleanup(body)
         self.assertEqual(
             body["cad_params"],
@@ -47,7 +49,6 @@ class GenerateEndpointTests(unittest.TestCase):
                 "edge_offset": 12,
             },
         )
-        self.assertIn("four mounting holes", body["message"])
 
         for file_url in body["files"].values():
             file_response = self.client.get(
@@ -62,7 +63,10 @@ class GenerateEndpointTests(unittest.TestCase):
             )
 
     def test_uses_default_parameters_when_not_supplied(self):
-        response = self.client.post("/generate", json={"prompt": "A baseplate"})
+        response = self.client.post(
+            "/generate",
+            json={"prompt": "Create a 100 x 60 mm baseplate with 6 mm holes"},
+        )
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
@@ -77,6 +81,22 @@ class GenerateEndpointTests(unittest.TestCase):
                 "edge_offset": 10,
             },
         )
+
+    def test_returns_clarification_without_files_for_generic_prompt(self):
+        response = self.client.post("/generate", json={"prompt": "A baseplate"})
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "clarification")
+        self.assertIsNone(body["files"])
+
+    def test_returns_unsupported_without_files_for_unsupported_object(self):
+        response = self.client.post("/generate", json={"prompt": "Make a sphere"})
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "unsupported")
+        self.assertIsNone(body["files"])
 
     def test_rejects_invalid_hole_dimensions(self):
         response = self.client.post(

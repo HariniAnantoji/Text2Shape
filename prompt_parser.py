@@ -16,6 +16,17 @@ _SUPPORTED_TERMS = re.compile(
     r"length|long(?:er)?|width|wide(?:r)?|edge\s+offset|size|dimensions?)\b",
     re.IGNORECASE,
 )
+_FOUR_HOLE_CREATION = re.compile(
+    r"\b(?:create|make|generate|build)\b.*\bbase\s*plate\b.*"
+    r"\b(?:four|4)\s+(?:corner\s+)?(?:mounting\s+)?holes?\b|"
+    r"\b(?:add|create|make|generate)\s+(?:four|4)\s+mounting\s+holes?\b",
+    re.IGNORECASE,
+)
+_HOLE_SIZE_CONTEXT = re.compile(
+    r"\bholes?\b.{0,40}\b(?:larger|smaller|bigger)\b|"
+    r"\b(?:larger|smaller|bigger)\b.{0,40}\bholes?\b",
+    re.IGNORECASE,
+)
 _UNSUPPORTED_OBJECTS = re.compile(
     r"\b(?:sphere|cube|gear|lamp|cylinder|bracket|screw|pipe)\b",
     re.IGNORECASE,
@@ -87,6 +98,8 @@ def interpret_prompt(prompt: str, current: BaseplateParams) -> PromptInterpretat
         "hole_diameter": (
             rf"\bhole(?:s)?(?:\s+(?:diameter|dia))?\s*(?:of|=|:|to)?\s*{_NUMBER}\s*(?:mm)?\b",
             rf"\b{_NUMBER}\s*mm\s*(?:diameter\s*)?holes?\b",
+            rf"\bholes?\s+M\s*{_NUMBER}\b",
+            rf"\bM\s*{_NUMBER}\s+holes?\b",
         ),
         "edge_offset": (
             rf"\b(?:edge\s+offset|offset)\s*(?:of|=|:|to)?\s*{_NUMBER}\s*(?:mm)?\b",
@@ -104,12 +117,31 @@ def interpret_prompt(prompt: str, current: BaseplateParams) -> PromptInterpretat
         ("width", ("wider", "narrower"), 10.0),
         ("hole_diameter", ("larger", "smaller"), 1.0),
     ):
+        if field == "hole_diameter" and not _HOLE_SIZE_CONTEXT.search(prompt):
+            continue
         if field not in changes:
             changes[field] = values[field] + _relative_delta(prompt, expressions, default)
             if changes[field] == values[field]:
                 changes.pop(field)
 
+    edge_offset_reduction = re.search(
+        rf"\b(?:reduce|decrease)\s+(?:the\s+)?(?:hole\s+)?"
+        rf"(?:spacing|offset)\s+(?:from\s+the\s+)?edges?"
+        rf"(?:\s+by\s+({_NUMBER_VALUE})\s*(?:mm)?)?",
+        prompt,
+        re.IGNORECASE,
+    )
+    if edge_offset_reduction:
+        amount = float(edge_offset_reduction.group(1) or 2.0)
+        changes["edge_offset"] = values["edge_offset"] - amount
+
     if not changes:
+        if _FOUR_HOLE_CREATION.search(prompt):
+            return PromptInterpretation(
+                status="generated",
+                message="Generated a baseplate with four corner holes using the current parameters.",
+                cad_params=current,
+            )
         if _AMBIGUOUS_TERMS.search(prompt):
             return PromptInterpretation(
                 status="clarification",

@@ -4,7 +4,7 @@ import type { ChatMessage } from './types';
 export const QUICK_PROMPT_PILLS = [
   "Create a baseplate with four corner holes",
   "Make the baseplate thicker",
-  "Increase the baseplate length",
+  "Make the baseplate longer",
   "Reduce the hole spacing from the edges"
 ];
 

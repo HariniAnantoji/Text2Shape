@@ -45,13 +45,16 @@ generated STL and STEP files:
 ```sh
 curl -X POST http://127.0.0.1:8000/generate \
   -H "Content-Type: application/json" \
-  -d '{"prompt":"Create a baseplate","cad_params":{"length":100,"width":60,"thickness":8,"hole_diameter":6,"edge_offset":10}}'
+  -d '{"prompt":"Create a 100 x 60 mm baseplate with 6 mm holes","cad_params":{"length":100,"width":60,"thickness":8,"hole_diameter":6,"edge_offset":10}}'
 ```
 
 The prompt parser extracts length, width, thickness, hole diameter, and edge
 offset, and applies edits to the submitted current parameters. Relative
 “thicker” and “thinner” requests change thickness by 2 mm unless an explicit
-amount is given. Ambiguous and unsupported prompts return a status and
+amount is given. Reducing hole spacing from the edges decreases the edge
+offset by 2 mm unless an explicit amount is given. Generic “larger” or
+“smaller” requests ask which dimension to change; hole diameter changes must
+mention holes. Ambiguous and unsupported prompts return a status and
 clarification message without generating new files. Generated files are
 served locally through restricted `/artifacts/` URLs. The frontend loads the
 STL in the 3D viewport and provides a STEP download link. Local file storage
