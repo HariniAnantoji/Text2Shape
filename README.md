@@ -12,6 +12,25 @@ python -m pip install -r requirements.txt
 
 Add Python packages to `requirements.txt` as the project needs them.
 
+## Run the API
+
+Start the development server from the project root:
+
+```sh
+python -m uvicorn main:app --reload
+```
+
+Send a prompt to `POST /generate` as JSON:
+
+```sh
+curl -X POST http://127.0.0.1:8000/generate \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"Design a small desk lamp"}'
+```
+
+The route currently returns the received prompt; connect it to the shape
+generation logic when that is added.
+
 ## Environment variables and API keys
 
 Never commit `.env` or real API keys to GitHub. Create your local `.env` by
