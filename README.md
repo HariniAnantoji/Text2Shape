@@ -21,13 +21,25 @@ Add Python packages to `requirements.txt` as the project needs them.
 
 ## Run the API
 
-Start the development server from the project root:
+Start the API from `Text2Shape`:
 
 ```sh
 python -m uvicorn main:app --reload
 ```
 
-Send a prompt to `POST /generate` as JSON:
+In another terminal, start the frontend:
+
+```sh
+cd frontend
+npm install
+npm run dev
+```
+
+The frontend sends prompts to `http://localhost:8000/generate`. To use a
+different API URL, set `NEXT_PUBLIC_API_URL` before starting Next.js.
+
+`POST /generate` accepts a prompt and returns a placeholder message plus
+validated CAD parameters:
 
 ```sh
 curl -X POST http://127.0.0.1:8000/generate \
@@ -35,8 +47,9 @@ curl -X POST http://127.0.0.1:8000/generate \
   -d '{"prompt":"Design a small desk lamp"}'
 ```
 
-The route currently returns the received prompt; connect it to the shape
-generation logic when that is added.
+The endpoint currently acknowledges the prompt and returns the initial
+placeholder parameters; it does not yet generate or modify geometry. Local
+browser requests are allowed from `http://localhost:3000`.
 
 ## Environment variables and API keys
 

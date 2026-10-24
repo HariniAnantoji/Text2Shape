@@ -7,6 +7,18 @@ export interface CadParams {
   mountingHoles: boolean;
 }
 
+export interface GenerateResponse {
+  message: string;
+  cad_params: {
+    teeth_count: number;
+    outer_radius: number;
+    bore_diameter: number;
+    extrusion_depth: number;
+    fillet_radius: number;
+    mounting_holes: boolean;
+  };
+}
+
 export interface ChatMessage {
   id: number;
   sender: 'ai' | 'user';

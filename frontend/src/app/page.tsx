@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { BlueprintView } from '../components/BlueprintView';
 import { ThreeViewport } from '../components/ThreeViewport';
 import { INITIAL_MESSAGES, MATERIALS, QUICK_PROMPT_PILLS } from '../textToShapeData';
-import type { CadParams, ChatMessage, MaterialKey, ModelVersion } from '../types';
+import type { CadParams, ChatMessage, GenerateResponse, MaterialKey, ModelVersion } from '../types';
 import { 
   Box, 
   Layers, 
@@ -40,7 +40,6 @@ export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>(INITIAL_MESSAGES);
   const [inputPrompt, setInputPrompt] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
-  const [generationStep, setGenerationStep] = useState(0);
   const [activeVersion, setActiveVersion] = useState('v1.0');
   const chatBottomRef = useRef<HTMLDivElement>(null);
   const nextMessageId = useRef(4);
@@ -99,8 +98,8 @@ export default function App() {
   }, [messages, isGenerating]);
 
   // Handle Prompt Submission
-  const handleSendMessage = (textToSend: string = inputPrompt) => {
-    const query = textToSend;
+  const handleSendMessage = async (textToSend?: string) => {
+    const query = (textToSend ?? inputPrompt).trim();
     if (!query.trim() || isGenerating) return;
 
     const userMsg: ChatMessage = {
@@ -112,71 +111,46 @@ export default function App() {
     };
 
     setMessages((prev) => [...prev, userMsg]);
-    if (!textToSend) setInputPrompt('');
+    if (textToSend === undefined) setInputPrompt('');
     setIsGenerating(true);
-    setGenerationStep(0);
-
-    const stepsInterval = setInterval(() => {
-      setGenerationStep((prev) => {
-        if (prev >= 3) {
-          clearInterval(stepsInterval);
-          setIsGenerating(false);
-
-          const lower = query.toLowerCase();
-          const newParams = { ...cadParams };
-                const changeLogs: string[] = [];
-
-          if (lower.includes('thicker') || lower.includes('depth')) {
-            newParams.extrusionDepth = Math.min(newParams.extrusionDepth + 10, 50);
-            changeLogs.push(`Extrusion Depth increased to ${newParams.extrusionDepth}mm`);
-          }
-          if (lower.includes('hole') || lower.includes('mounting')) {
-            newParams.mountingHoles = true;
-            changeLogs.push('Added 4x M6 mounting hole pattern');
-          }
-          if (lower.includes('fillet') || lower.includes('edge')) {
-            newParams.filletRadius = 5.0;
-            changeLogs.push('Applied 5mm fillet on feature edges');
-          }
-          if (lower.includes('teeth') || lower.includes('gear')) {
-            newParams.teethCount = 28;
-            newParams.outerRadius = 50;
-            changeLogs.push('Updated tooth profile count to 28');
-          }
-          if (changeLogs.length === 0) {
-            newParams.extrusionDepth += 4;
-            changeLogs.push('Modified parametric boundary dimensions');
-          }
-
-          setCadParams(newParams);
-
-          const verString = `v1.${history.length}`;
-          setHistory((prevHist) => [
-            {
-              version: verString,
-              title: query.slice(0, 24) + '...',
-              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-              cadParams: newParams
-            },
-            ...prevHist
-          ]);
-          setActiveVersion(verString);
-
-          const aiMessage: ChatMessage = {
-            id: nextMessageId.current++,
-            sender: 'ai',
-            text: `Updated 3D geometry model based on query: "${query}". Manifold topology re-calculated.`,
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            version: verString,
-            changes: changeLogs
-          };
-          setMessages((prevMsgs) => [...prevMsgs, aiMessage]);
-
-          return 3;
-        }
-        return prev + 1;
+    try {
+      const apiUrl = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000').replace(/\/+$/, '');
+      const response = await fetch(`${apiUrl}/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: query }),
       });
-    }, 550);
+
+      if (!response.ok) {
+        throw new Error(`API request failed (${response.status})`);
+      }
+
+      const result: GenerateResponse = await response.json();
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: nextMessageId.current++,
+          sender: 'ai',
+          text: result.message,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          version: null,
+        },
+      ]);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'Unknown error';
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: nextMessageId.current++,
+          sender: 'ai',
+          text: `Unable to complete the API request: ${detail}. Check that FastAPI is running at the configured API URL.`,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          version: null,
+        },
+      ]);
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   const handleCopyCode = () => {
@@ -336,12 +310,7 @@ export default function App() {
               <div className={`p-3.5 rounded-2xl border ${theme.cardBg} space-y-2 animate-pulse`}>
                 <div className="flex items-center gap-2 text-cyan-500 font-mono font-semibold text-[11px]">
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  <span>AI Modeling Kernel Reasoning...</span>
-                </div>
-                <div className={`space-y-1 text-[11px] font-mono ${theme.subText}`}>
-                  <div className={generationStep >= 0 ? "text-emerald-500 font-semibold" : ""}>✓ Parsing natural language geometric constraints</div>
-                  <div className={generationStep >= 1 ? "text-emerald-500 font-semibold" : ""}>✓ Re-calculating CSG boolean intersections</div>
-                  <div className={generationStep >= 2 ? "text-emerald-500 font-semibold" : ""}>✓ Re-tessellating manifold mesh boundaries</div>
+                  <span>Waiting for API response...</span>
                 </div>
               </div>
             )}
