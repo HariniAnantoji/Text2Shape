@@ -153,6 +153,7 @@ activemq-data/
 .env
 .envrc
 .venv
+generated_models/
 env/
 venv/
 ENV/

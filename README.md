@@ -38,18 +38,20 @@ npm run dev
 The frontend sends prompts to `http://localhost:8000/generate`. To use a
 different API URL, set `NEXT_PUBLIC_API_URL` before starting Next.js.
 
-`POST /generate` accepts a prompt and returns a placeholder message plus
-validated CAD parameters:
+`POST /generate` accepts a prompt and optional baseplate parameters. It returns
+validated parameters and URLs for generated STEP and STL files:
 
 ```sh
 curl -X POST http://127.0.0.1:8000/generate \
   -H "Content-Type: application/json" \
-  -d '{"prompt":"Design a small desk lamp"}'
+  -d '{"prompt":"Make a baseplate","cad_params":{"length":120,"width":80,"thickness":10,"hole_diameter":8,"edge_offset":12}}'
 ```
 
-The endpoint currently acknowledges the prompt and returns the initial
-placeholder parameters; it does not yet generate or modify geometry. Local
-browser requests are allowed from `http://localhost:3000`.
+The CAD engine currently uses the supplied parameters (or defaults); it does
+not infer dimensions from the prompt yet. Generated files are served locally
+under `/files/`. This local file storage is for development; configure managed
+storage such as S3 before deploying. Local browser requests are allowed from
+`http://localhost:3000`.
 
 ## Baseplate CAD prototype
 
