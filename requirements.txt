@@ -1,3 +1,4 @@
 # Add Python dependencies here, one package per line.
 fastapi
 uvicorn
+build123d>=0.13,<0.14

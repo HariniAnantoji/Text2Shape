@@ -51,6 +51,16 @@ The endpoint currently acknowledges the prompt and returns the initial
 placeholder parameters; it does not yet generate or modify geometry. Local
 browser requests are allowed from `http://localhost:3000`.
 
+## Baseplate CAD prototype
+
+The standalone `cad_generator.py` module creates a baseplate with four
+through-holes and exports STEP and STL files. It does not yet run from the API.
+Run its focused tests from the project root with:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests
+```
+
 ## Environment variables and API keys
 
 Never commit `.env` or real API keys to GitHub. Create your local `.env` by
