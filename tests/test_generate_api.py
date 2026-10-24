@@ -5,7 +5,7 @@ from urllib.parse import urlsplit
 
 from fastapi.testclient import TestClient
 
-from main import GENERATED_MODELS_DIR, app
+from main import ARTIFACTS_DIR, app
 
 
 class GenerateEndpointTests(unittest.TestCase):
@@ -17,7 +17,7 @@ class GenerateEndpointTests(unittest.TestCase):
 
     def register_generated_file_cleanup(self, response_body):
         model_id = Path(urlsplit(response_body["files"]["step_url"]).path).parent.name
-        self.addCleanup(shutil.rmtree, GENERATED_MODELS_DIR / model_id, ignore_errors=True)
+        self.addCleanup(shutil.rmtree, ARTIFACTS_DIR / model_id, ignore_errors=True)
 
     def test_generates_and_serves_baseplate_exports(self):
         response = self.client.post(

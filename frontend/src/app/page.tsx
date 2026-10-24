@@ -1,13 +1,12 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { BlueprintView } from '../components/BlueprintView';
 import { ThreeViewport } from '../components/ThreeViewport';
 import { INITIAL_MESSAGES, MATERIALS, QUICK_PROMPT_PILLS } from '../textToShapeData';
-import type { CadParams, ChatMessage, GenerateResponse, MaterialKey, ModelVersion } from '../types';
+import type { CadParams, ChatMessage, GenerateResponse, MaterialKey, ModelArtifacts, ModelVersion } from '../types';
 import { 
   Box, 
-  Layers, 
   Cpu, 
   Code, 
   Eye, 
@@ -22,6 +21,7 @@ import {
   Compass,
   Copy,
   Check,
+  Download,
   Terminal,
   Send,
   MessageSquare,
@@ -40,6 +40,7 @@ export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>(INITIAL_MESSAGES);
   const [inputPrompt, setInputPrompt] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [modelArtifacts, setModelArtifacts] = useState<ModelArtifacts | null>(null);
   const [activeVersion, setActiveVersion] = useState('v1.0');
   const chatBottomRef = useRef<HTMLDivElement>(null);
   const nextMessageId = useRef(4);
@@ -48,15 +49,14 @@ export default function App() {
   const [history, setHistory] = useState<ModelVersion[]>([
     {
       version: 'v1.0',
-      title: 'Initial Spur Gear Solid',
+      title: 'Initial Baseplate',
       time: '10:43 AM',
       cadParams: {
-        teethCount: 20,
-        outerRadius: 40,
-        boreDiameter: 15,
-        extrusionDepth: 18,
-        filletRadius: 2.5,
-        mountingHoles: false
+        length: 100,
+        width: 60,
+        thickness: 8,
+        holeDiameter: 6,
+        edgeOffset: 10,
       }
     },
   ]);
@@ -69,33 +69,53 @@ export default function App() {
   const [xrayMode, setXrayMode] = useState(false);
   const [showGrid, setShowGrid] = useState(true);
   const [showDimensions, setShowDimensions] = useState(true);
-  const [explodedView, setExplodedView] = useState(false);
 
   // Dynamic CAD Parameters
   const [cadParams, setCadParams] = useState<CadParams>({
-    teethCount: 20,
-    outerRadius: 40,
-    boreDiameter: 15,
-    extrusionDepth: 18,
-    filletRadius: 2.5,
-    mountingHoles: false
+    length: 100,
+    width: 60,
+    thickness: 8,
+    holeDiameter: 6,
+    edgeOffset: 10,
   });
 
   // Dynamic Metrics Calculation
   const metrics = useMemo(() => {
-    const r = cadParams.outerRadius;
-    const h = cadParams.extrusionDepth;
-    const volume = (Math.PI * Math.pow(r, 2) * h / 1000).toFixed(2);
-    const surfaceArea = (2 * Math.PI * r * h + 2 * Math.PI * Math.pow(r, 2)).toFixed(1);
+    const holeRadius = cadParams.holeDiameter / 2;
+    const volume = ((cadParams.length * cadParams.width - 4 * Math.PI * holeRadius ** 2) * cadParams.thickness / 1000).toFixed(2);
     const mass = (Number(volume) * 7.85).toFixed(1);
-    const boundingBox = `${(r * 2).toFixed(0)} x ${(r * 2).toFixed(0)} x ${h} ${units}`;
-    return { volume, surfaceArea, mass, boundingBox };
+    const boundingBox = `${cadParams.length} x ${cadParams.width} x ${cadParams.thickness} ${units}`;
+    return { volume, mass, boundingBox };
   }, [cadParams, units]);
 
   // Auto-scroll Chat
   useEffect(() => {
     chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isGenerating]);
+
+  const updateCadParam = (key: keyof CadParams, value: number) => {
+    setCadParams((current) => {
+      const next = { ...current, [key]: value };
+      const maxEdgeOffset = Math.min(next.length, next.width) / 2 - 1;
+      next.edgeOffset = Math.min(next.edgeOffset, maxEdgeOffset);
+      next.holeDiameter = Math.min(next.holeDiameter, next.edgeOffset * 2);
+      return next;
+    });
+    setModelArtifacts(null);
+  };
+
+  const handleStlLoadError = useCallback((detail: string) => {
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: nextMessageId.current++,
+        sender: 'ai',
+        text: `The STL could not be loaded in the viewport: ${detail}`,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        version: null,
+      },
+    ]);
+  }, []);
 
   // Handle Prompt Submission
   const handleSendMessage = async (textToSend?: string) => {
@@ -118,7 +138,16 @@ export default function App() {
       const response = await fetch(`${apiUrl}/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: query }),
+        body: JSON.stringify({
+          prompt: query,
+          cad_params: {
+            length: cadParams.length,
+            width: cadParams.width,
+            thickness: cadParams.thickness,
+            hole_diameter: cadParams.holeDiameter,
+            edge_offset: cadParams.edgeOffset,
+          },
+        }),
       });
 
       if (!response.ok) {
@@ -126,6 +155,29 @@ export default function App() {
       }
 
       const result: GenerateResponse = await response.json();
+      const returnedParams: CadParams = {
+        length: result.cad_params.length,
+        width: result.cad_params.width,
+        thickness: result.cad_params.thickness,
+        holeDiameter: result.cad_params.hole_diameter,
+        edgeOffset: result.cad_params.edge_offset,
+      };
+      const version = `v1.${history.length}`;
+      setCadParams(returnedParams);
+      setModelArtifacts({
+        stlUrl: result.files.stl_url,
+        stepUrl: result.files.step_url,
+      });
+      setHistory((previous) => [
+        {
+          version,
+          title: query.slice(0, 24),
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          cadParams: returnedParams,
+        },
+        ...previous,
+      ]);
+      setActiveVersion(version);
       setMessages((prev) => [
         ...prev,
         {
@@ -133,7 +185,7 @@ export default function App() {
           sender: 'ai',
           text: result.message,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          version: null,
+          version,
         },
       ]);
     } catch (error) {
@@ -333,9 +385,8 @@ export default function App() {
                     key={item.version}
                     onClick={() => {
                       setActiveVersion(item.version);
-                      setCadParams({
-                        ...item.cadParams
-                      });
+                      setCadParams(item.cadParams);
+                      setModelArtifacts(null);
                     }}
                     className={`w-full p-1.5 rounded-lg text-left text-[11px] font-mono flex items-center justify-between border transition ${
                       activeVersion === item.version 
@@ -448,13 +499,14 @@ export default function App() {
             {activeTab === '3d' && (
               <>
                 <ThreeViewport 
-                  cadParams={cadParams} 
+                  cadParams={cadParams}
+                  stlUrl={modelArtifacts?.stlUrl ?? null}
                   materialKey={materialKey}
                   wireframe={wireframe}
                   xrayMode={xrayMode}
                   showGrid={showGrid}
-                  explodedView={explodedView}
                   darkMode={darkMode}
+                  onStlLoadError={handleStlLoadError}
                 />
 
                 {/* Viewport Controls */}
@@ -487,64 +539,93 @@ export default function App() {
                   >
                     <Ruler className="w-3.5 h-3.5" /> Annotations
                   </button>
-                  <button 
-                    onClick={() => setExplodedView(!explodedView)}
-                    className={`p-2 rounded-lg text-xs font-mono flex items-center gap-1 transition ${explodedView ? 'bg-cyan-500/20 text-cyan-500 border border-cyan-500/50' : `${theme.subText} hover:bg-slate-500/10`}`}
-                    title="Explode Assembly"
-                  >
-                    <Layers className="w-3.5 h-3.5" /> Explode
-                  </button>
                 </div>
 
                 {/* Dynamic Parameter Inspector */}
                 <div className={`absolute top-4 right-4 w-64 p-3.5 rounded-2xl border space-y-3 z-20 shadow-2xl backdrop-blur-md ${theme.cardBg}`}>
                   <div className={`flex items-center justify-between text-xs font-semibold ${darkMode ? 'text-cyan-400' : 'text-cyan-700'} uppercase tracking-wider border-b ${theme.border} pb-2`}>
-                    <span className="flex items-center gap-1.5"><Sliders className="w-3.5 h-3.5" /> Parametric Controls</span>
+                    <span className="flex items-center gap-1.5"><Sliders className="w-3.5 h-3.5" /> Baseplate Parameters</span>
                   </div>
 
                   <div className="space-y-3 font-mono text-xs">
                     <div>
                       <div className="flex justify-between mb-1">
-                        <span className={theme.subText}>Outer Dia:</span>
-                        <span className="font-bold text-cyan-500">{(cadParams.outerRadius * 2)} {units}</span>
+                        <span className={theme.subText}>Length:</span>
+                        <span className="font-bold text-cyan-500">{cadParams.length} {units}</span>
                       </div>
                       <input
                         type="range"
-                        min="20"
-                        max="60"
-                        value={cadParams.outerRadius}
-                        onChange={(e) => setCadParams({ ...cadParams, outerRadius: Number(e.target.value) })}
+                        min="50"
+                        max="200"
+                        value={cadParams.length}
+                        disabled={isGenerating}
+                        onChange={(e) => updateCadParam('length', Number(e.target.value))}
                         className="w-full accent-cyan-500 bg-slate-700 rounded-lg cursor-pointer h-1.5"
                       />
                     </div>
 
                     <div>
                       <div className="flex justify-between mb-1">
-                        <span className={theme.subText}>Thickness/Depth:</span>
-                        <span className="font-bold text-cyan-500">{cadParams.extrusionDepth} {units}</span>
+                        <span className={theme.subText}>Width:</span>
+                        <span className="font-bold text-cyan-500">{cadParams.width} {units}</span>
                       </div>
                       <input
                         type="range"
-                        min="5"
-                        max="50"
-                        value={cadParams.extrusionDepth}
-                        onChange={(e) => setCadParams({ ...cadParams, extrusionDepth: Number(e.target.value) })}
+                        min="30"
+                        max="120"
+                        value={cadParams.width}
+                        disabled={isGenerating}
+                        onChange={(e) => updateCadParam('width', Number(e.target.value))}
                         className="w-full accent-cyan-500 bg-slate-700 rounded-lg cursor-pointer h-1.5"
                       />
                     </div>
 
                     <div>
                       <div className="flex justify-between mb-1">
-                        <span className={theme.subText}>Fillet Radius:</span>
-                        <span className="font-bold text-cyan-500">{cadParams.filletRadius} {units}</span>
+                        <span className={theme.subText}>Thickness:</span>
+                        <span className="font-bold text-cyan-500">{cadParams.thickness} {units}</span>
                       </div>
                       <input
                         type="range"
-                        min="0"
-                        max="8"
+                        min="3"
+                        max="25"
+                        value={cadParams.thickness}
+                        disabled={isGenerating}
+                        onChange={(e) => updateCadParam('thickness', Number(e.target.value))}
+                        className="w-full accent-cyan-500 bg-slate-700 rounded-lg cursor-pointer h-1.5"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex justify-between mb-1">
+                        <span className={theme.subText}>Hole Diameter:</span>
+                        <span className="font-bold text-cyan-500">{cadParams.holeDiameter} {units}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="3"
+                        max={Math.min(20, cadParams.edgeOffset * 2)}
                         step="0.5"
-                        value={cadParams.filletRadius}
-                        onChange={(e) => setCadParams({ ...cadParams, filletRadius: Number(e.target.value) })}
+                        value={cadParams.holeDiameter}
+                        disabled={isGenerating}
+                        onChange={(e) => updateCadParam('holeDiameter', Number(e.target.value))}
+                        className="w-full accent-cyan-500 bg-slate-700 rounded-lg cursor-pointer h-1.5"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex justify-between mb-1">
+                        <span className={theme.subText}>Edge Offset:</span>
+                        <span className="font-bold text-cyan-500">{cadParams.edgeOffset} {units}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={Math.ceil(cadParams.holeDiameter / 2)}
+                        max={Math.max(1, Math.floor(Math.min(cadParams.length, cadParams.width) / 2) - 1)}
+                        step="0.5"
+                        value={cadParams.edgeOffset}
+                        disabled={isGenerating}
+                        onChange={(e) => updateCadParam('edgeOffset', Number(e.target.value))}
                         className="w-full accent-cyan-500 bg-slate-700 rounded-lg cursor-pointer h-1.5"
                       />
                     </div>
@@ -569,6 +650,19 @@ export default function App() {
               </>
             )}
 
+            {activeTab === '3d' && modelArtifacts?.stepUrl && (
+              <a
+                href={modelArtifacts.stepUrl}
+                className={`absolute bottom-4 left-4 z-20 flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-semibold shadow-xl backdrop-blur-md ${
+                  darkMode
+                    ? 'bg-slate-900/90 border-emerald-700 text-emerald-300 hover:bg-slate-800'
+                    : 'bg-white/90 border-emerald-300 text-emerald-700 hover:bg-emerald-50'
+                }`}
+              >
+                <Download className="w-4 h-4" /> Download STEP
+              </a>
+            )}
+
             {/* VIEWPORT TAB 2: 2D BLUEPRINT */}
             {activeTab === '2d' && (
               <BlueprintView cadParams={cadParams} units={units} darkMode={darkMode} />
@@ -580,7 +674,7 @@ export default function App() {
                 <div className="max-w-4xl mx-auto space-y-4">
                   <div className={`flex items-center justify-between p-3 rounded-xl border ${theme.cardBg}`}>
                     <span className="flex items-center gap-2">
-                      <Terminal className="w-4 h-4 text-emerald-500" /> CadQuery Python B-Rep Script
+                      <Terminal className="w-4 h-4 text-emerald-500" /> build123d Python B-Rep Script
                     </span>
                     <button
                       onClick={handleCopyCode}
@@ -594,43 +688,29 @@ export default function App() {
                   <pre className={`p-4 rounded-xl border leading-relaxed overflow-x-auto ${
                     darkMode ? 'bg-slate-900 border-slate-800 text-cyan-300' : 'bg-white border-slate-200 text-cyan-800 shadow-sm'
                   }`}>
-{`import cadquery as cq
+{`from build123d import Align, Box, Cylinder, Pos, export_step, export_stl
 
-# Text to Shape Generated Script
-# Active Model Version: ${activeVersion}
+# Baseplate parameters for ${activeVersion}
+length = ${cadParams.length}  # ${units}
+width = ${cadParams.width}  # ${units}
+thickness = ${cadParams.thickness}  # ${units}
+hole_diameter = ${cadParams.holeDiameter}  # ${units}
+edge_offset = ${cadParams.edgeOffset}  # ${units}
 
-teeth_count = ${cadParams.teethCount}
-outer_radius = ${cadParams.outerRadius}  # ${units}
-bore_diameter = ${cadParams.boreDiameter}  # ${units}
-extrusion_depth = ${cadParams.extrusionDepth}  # ${units}
-fillet_radius = ${cadParams.filletRadius}  # ${units}
+result = Box(length, width, thickness, align=(Align.CENTER, Align.CENTER, Align.CENTER))
+hole_x = length / 2 - edge_offset
+hole_y = width / 2 - edge_offset
+for x in (-hole_x, hole_x):
+    for y in (-hole_y, hole_y):
+        cutter = Pos(x, y, 0) * Cylinder(
+            hole_diameter / 2,
+            thickness + 2,
+            align=(Align.CENTER, Align.CENTER, Align.CENTER),
+        )
+        result -= cutter
 
-# Base Geometry Solid Extrusion
-result = (
-    cq.Workplane("XY")
-    .circle(outer_radius)
-    .extrude(extrusion_depth)
-)
-
-# Hole Cuts
-result = (
-    result.faces(">Z")
-    .workplane()
-    .hole(bore_diameter)
-)
-
-${cadParams.mountingHoles ? `# Mounting Holes Pattern
-result = (
-    result.faces(">Z").workplane()
-    .pushPoints([(-25, -25), (25, -25), (25, 25), (-25, 25)])
-    .hole(6.0)
-)` : ''}
-
-# Apply Edge Fillets
-result = result.edges("|Z").fillet(fillet_radius)
-
-# Export B-Rep Geometry
-cq.exporters.export(result, "text_to_shape_${activeVersion}.step")
+export_step(result, "baseplate.step")
+export_stl(result, "baseplate.stl")
 `}
                   </pre>
                 </div>

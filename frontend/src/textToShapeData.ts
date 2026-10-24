@@ -2,34 +2,33 @@ import type { ChatMessage } from './types';
 
 // Preset Prompts & Quick Actions
 export const QUICK_PROMPT_PILLS = [
-  "Add 4 mounting holes M6",
-  "Make baseplate thicker",
-  "Add a 5mm fillet on all edges",
-  "Fillet top edge and hollow out center"
+  "Create a baseplate with four corner holes",
+  "Make the baseplate thicker",
+  "Increase the baseplate length",
+  "Reduce the hole spacing from the edges"
 ];
 
 export const INITIAL_MESSAGES: ChatMessage[] = [
   {
     id: 1,
     sender: 'ai',
-    text: "Welcome to Text to Shape! I'm your assistant for generating parametric 3D CAD geometry. Switch between Light and Dark mode anytime above!",
+    text: "Welcome to Text to Shape! I'm your assistant for generating parametric baseplates. Set dimensions in the controls, then describe your design.",
     timestamp: '10:42 AM',
     version: null
   },
   {
     id: 2,
     sender: 'user',
-    text: "Mechanical Spur Gear with 20 teeth, pitch diameter 80mm, bore diameter 15mm with standard keyway slot.",
+    text: "Create a 100 x 60 mm baseplate with four 6 mm corner holes.",
     timestamp: '10:43 AM',
     version: null
   },
   {
     id: 3,
     sender: 'ai',
-    text: "Generated parametric spur gear solid with keyway feature and 20 teeth. Mesh validated as manifold B-Rep.",
+    text: "Initial baseplate parameters are ready. Send a prompt to generate and preview the STL.",
     timestamp: '10:43 AM',
-    version: 'v1.0',
-    changes: ['Created Spur Gear Base', 'Pitch Dia: 80mm', 'Bore Dia: 15mm']
+    version: null
   }
 ];
 

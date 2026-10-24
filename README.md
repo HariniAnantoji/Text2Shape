@@ -38,26 +38,27 @@ npm run dev
 The frontend sends prompts to `http://localhost:8000/generate`. To use a
 different API URL, set `NEXT_PUBLIC_API_URL` before starting Next.js.
 
-`POST /generate` accepts a prompt and optional baseplate parameters. It returns
-validated parameters and URLs for generated STEP and STL files:
+`POST /generate` accepts a prompt and optional baseplate parameters. The
+response contains validated parameters and a `files` object with URLs for the
+generated STL and STEP files:
 
 ```sh
 curl -X POST http://127.0.0.1:8000/generate \
   -H "Content-Type: application/json" \
-  -d '{"prompt":"Make a baseplate","cad_params":{"length":120,"width":80,"thickness":10,"hole_diameter":8,"edge_offset":12}}'
+  -d '{"prompt":"Create a baseplate","cad_params":{"length":100,"width":60,"thickness":8,"hole_diameter":6,"edge_offset":10}}'
 ```
 
-The CAD engine currently uses the supplied parameters (or defaults); it does
-not infer dimensions from the prompt yet. Generated files are served locally
-under `/files/`. This local file storage is for development; configure managed
-storage such as S3 before deploying. Local browser requests are allowed from
-`http://localhost:3000`.
+The CAD engine uses supplied parameters (or defaults); it does not infer
+dimensions from the prompt yet. Generated files are served locally through
+restricted `/artifacts/` URLs. The frontend loads the STL in the 3D viewport
+and provides a STEP download link. Local file storage is for development;
+configure managed storage such as S3 before deploying. Local browser requests
+are allowed from `http://localhost:3000`.
 
-## Baseplate CAD prototype
+## Baseplate CAD tests
 
-The standalone `cad_generator.py` module creates a baseplate with four
-through-holes and exports STEP and STL files. It does not yet run from the API.
-Run its focused tests from the project root with:
+The API uses `cad_generator.py` to create the baseplate with four through-holes
+and export STEP and STL files. Run its focused tests from the project root with:
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests
