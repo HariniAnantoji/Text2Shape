@@ -38,24 +38,24 @@ npm run dev
 The frontend sends prompts to `http://localhost:8000/generate`. To use a
 different API URL, set `NEXT_PUBLIC_API_URL` before starting Next.js.
 
-`POST /generate` accepts a prompt and returns a placeholder message plus
-validated CAD parameters:
+`POST /generate` accepts a prompt and optional baseplate parameters. The
+response contains validated parameters plus URLs for the generated STL and
+STEP files:
 
 ```sh
 curl -X POST http://127.0.0.1:8000/generate \
   -H "Content-Type: application/json" \
-  -d '{"prompt":"Design a small desk lamp"}'
+  -d '{"prompt":"Create a baseplate","cad_params":{"length":100,"width":60,"thickness":8,"hole_diameter":6,"edge_offset":10}}'
 ```
 
-The endpoint currently acknowledges the prompt and returns the initial
-placeholder parameters; it does not yet generate or modify geometry. Local
-browser requests are allowed from `http://localhost:3000`.
+Generated STL and STEP files are available from the returned artifact URLs.
+The frontend loads the STL in the 3D viewport and provides a STEP download
+link. Local browser requests are allowed from `http://localhost:3000`.
 
-## Baseplate CAD prototype
+## Baseplate CAD tests
 
-The standalone `cad_generator.py` module creates a baseplate with four
-through-holes and exports STEP and STL files. It does not yet run from the API.
-Run its focused tests from the project root with:
+The API uses `cad_generator.py` to create the baseplate with four through-holes
+and export STEP and STL files. Run its focused tests from the project root with:
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests

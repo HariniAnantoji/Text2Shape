@@ -1,22 +1,27 @@
 export interface CadParams {
-  teethCount: number;
-  outerRadius: number;
-  boreDiameter: number;
-  extrusionDepth: number;
-  filletRadius: number;
-  mountingHoles: boolean;
+  length: number;
+  width: number;
+  thickness: number;
+  holeDiameter: number;
+  edgeOffset: number;
 }
 
 export interface GenerateResponse {
   message: string;
   cad_params: {
-    teeth_count: number;
-    outer_radius: number;
-    bore_diameter: number;
-    extrusion_depth: number;
-    fillet_radius: number;
-    mounting_holes: boolean;
+    length: number;
+    width: number;
+    thickness: number;
+    hole_diameter: number;
+    edge_offset: number;
   };
+  stl_url: string;
+  step_url: string;
+}
+
+export interface ModelArtifacts {
+  stlUrl: string;
+  stepUrl: string;
 }
 
 export interface ChatMessage {
