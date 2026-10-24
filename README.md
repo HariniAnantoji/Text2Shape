@@ -1,6 +1,13 @@
 # Text2Shape
 Ai integrated CAD applications you can chat to design.
 
+## Frontend file layout
+
+- `frontend/src/app/page.tsx` contains the main app state and workspace layout.
+- `frontend/src/components/ThreeViewport.tsx` owns the Three.js viewport.
+- `frontend/src/components/BlueprintView.tsx` renders the 2D blueprint.
+- `frontend/src/textToShapeData.ts` holds shared prompts, initial chat messages, and material presets.
+
 ## Python setup
 
 Activate the virtual environment and install project dependencies:
