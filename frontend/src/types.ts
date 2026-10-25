@@ -40,6 +40,19 @@ export interface HoleFeature {
   diameter: number;
 }
 
+export interface ImportedMesh {
+  id: string;
+  filename: string;
+  length: number;
+  width: number;
+  height: number;
+  x: number;
+  y: number;
+  z: number;
+  scale_factor: number;
+  source_url: string;
+}
+
 export interface GenerateResponse {
   status: 'generated' | 'clarification' | 'unsupported';
   message: string;
@@ -55,6 +68,7 @@ export interface GenerateResponse {
   };
   features?: PrimitiveFeature[];
   holes?: HoleFeature[];
+  imported_mesh?: ImportedMesh | null;
   files?: {
     stl_url: string;
     step_url: string;
@@ -82,7 +96,28 @@ export interface ModelVersion {
   cadParams: CadParams;
   features: PrimitiveFeature[];
   holes: HoleFeature[];
+  importedMesh: ImportedMesh | null;
   artifacts: ModelArtifacts | null;
 }
 
-export type MaterialKey = 'steel' | 'aluminum' | 'polymer' | 'brass' | 'carbon';
+export type MaterialKey = 'steel' | 'aluminum' | 'polymer' | 'brass' | 'carbon' | 'copper' | 'titanium' | 'gold';
+
+export interface SavedProject {
+  /** Unique ID — hex timestamp + random suffix */
+  id: string;
+  name: string;
+  savedAt: string; // ISO date string
+  activeVersion: string;
+  cadParams: CadParams;
+  features: PrimitiveFeature[];
+  holes: HoleFeature[];
+  importedMesh: ImportedMesh | null;
+  modelArtifacts: ModelArtifacts | null;
+  history: ModelVersion[];
+  messages: ChatMessage[];
+  materialKey: MaterialKey;
+  wireframe: boolean;
+  xrayMode: boolean;
+  showGrid: boolean;
+  showDimensions: boolean;
+}

@@ -1,0 +1,13 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "InjectLlmApiKeySecretIntoContainer",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:GetSecretValue"
+      ],
+      "Resource": "arn:aws:secretsmanager:us-east-2:111122223333:secret:text2shape/llm-api-key-*"
+    }
+  ]
+}

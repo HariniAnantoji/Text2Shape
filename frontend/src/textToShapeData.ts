@@ -39,4 +39,7 @@ export const MATERIALS = {
   polymer: { name: 'Matte Polymer', colorLight: 0xe2e8f0, colorDark: 0x334155, metalness: 0.1, roughness: 0.8 },
   brass: { name: 'Polished Brass', colorLight: 0xd97706, colorDark: 0xf59e0b, metalness: 0.9, roughness: 0.3 },
   carbon: { name: 'Carbon Fiber', colorLight: 0x1e293b, colorDark: 0x0f172a, metalness: 0.5, roughness: 0.6 },
+  copper: { name: 'Copper', colorLight: 0xb45309, colorDark: 0xea8a4b, metalness: 0.95, roughness: 0.25 },
+  titanium: { name: 'Titanium', colorLight: 0x78716c, colorDark: 0xa8a29e, metalness: 0.85, roughness: 0.35 },
+  gold: { name: 'Gold', colorLight: 0xca8a04, colorDark: 0xfacc15, metalness: 1.0, roughness: 0.15 },
 };

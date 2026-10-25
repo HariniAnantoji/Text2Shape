@@ -1,0 +1,40 @@
+{
+  "family": "text2shape-api",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::111122223333:role/text2shape-ecs-execution-role",
+  "taskRoleArn": "arn:aws:iam::111122223333:role/text2shape-task-role",
+  "containerDefinitions": [
+    {
+      "name": "api",
+      "image": "111122223333.dkr.ecr.us-east-2.amazonaws.com/text2shape-api:latest",
+      "essential": true,
+      "portMappings": [
+        { "containerPort": 8000, "protocol": "tcp" }
+      ],
+      "environment": [
+        { "name": "CORS_ORIGINS", "value": "https://your-frontend.example.com" },
+        { "name": "AWS_REGION", "value": "us-east-2" },
+        { "name": "S3_BUCKET_NAME", "value": "text2shape-cad-artifacts-2026" },
+        { "name": "LLM_BASE_URL", "value": "https://api.together.xyz/v1" },
+        { "name": "LLM_MODEL", "value": "meta-llama/Llama-3.1-8B-Instruct-Turbo" }
+      ],
+      "secrets": [
+        {
+          "name": "LLM_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:us-east-2:111122223333:secret:text2shape/llm-api-key"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/text2shape-api",
+          "awslogs-region": "us-east-2",
+          "awslogs-stream-prefix": "api"
+        }
+      }
+    }
+  ]
+}

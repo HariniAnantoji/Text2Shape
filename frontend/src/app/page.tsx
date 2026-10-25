@@ -2,9 +2,12 @@
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { BlueprintView } from '../components/BlueprintView';
+import { ProjectsModal } from '../components/ProjectsModal';
+import { SaveDialog } from '../components/SaveDialog';
 import { ThreeViewport } from '../components/ThreeViewport';
+import { useSavedProjects } from '../hooks/useSavedProjects';
 import { INITIAL_MESSAGES, MATERIALS, QUICK_PROMPT_PILLS } from '../textToShapeData';
-import type { CadParams, ChatMessage, GenerateResponse, HoleFeature, MaterialKey, ModelArtifacts, ModelVersion, PrimitiveFeature } from '../types';
+import type { CadParams, ChatMessage, GenerateResponse, HoleFeature, ImportedMesh, MaterialKey, ModelArtifacts, ModelVersion, PrimitiveFeature, SavedProject } from '../types';
 import { 
   Box, 
   Cpu, 
@@ -31,6 +34,8 @@ import {
   ChevronDown,
   Plus,
   Trash2,
+  Save,
+  FolderOpen,
 } from 'lucide-react';
 
 // --- MAIN APP COMPONENT ---
@@ -38,12 +43,22 @@ export default function App() {
   const [darkMode, setDarkMode] = useState(true);
   const [activeTab, setActiveTab] = useState('3d');
 
+  // Saved Projects
+  const { projects, saveProject, deleteProject, exportProject, importProjectFile } = useSavedProjects();
+  const [showProjectsModal, setShowProjectsModal] = useState(false);
+  const [showSaveDialog, setShowSaveDialog] = useState(false);
+  const [projectImportError, setProjectImportError] = useState<string | null>(null);
+  const [savedBadge, setSavedBadge] = useState(false); // brief "Saved!" flash
+
   // Chat State
   const [messages, setMessages] = useState<ChatMessage[]>(INITIAL_MESSAGES);
   const [inputPrompt, setInputPrompt] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [editorError, setEditorError] = useState<string | null>(null);
   const [modelArtifacts, setModelArtifacts] = useState<ModelArtifacts | null>(null);
+  const [importedMesh, setImportedMesh] = useState<ImportedMesh | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
   const [activeVersion, setActiveVersion] = useState('v1.0');
   const chatBottomRef = useRef<HTMLDivElement>(null);
   const nextMessageId = useRef(4);
@@ -66,6 +81,7 @@ export default function App() {
       },
       features: [],
       holes: [],
+      importedMesh: null,
       artifacts: null,
     },
   ]);
@@ -133,7 +149,11 @@ export default function App() {
     return `\n# Added sphere ${index + 1}\nresult = result + Pos(${feature.x}, ${feature.y}, ${feature.z}) * Sphere(${feature.diameter / 2})`;
   }).join('\n');
 
-  const generatedScript = `from build123d import Align, Box, Cylinder, Pos, Sphere, export_step, export_stl
+  const importedMeshScript = importedMesh
+    ? `\n# Imported mesh: ${importedMesh.filename}\n# A triangulated STL mesh is not a B-rep solid, so it is merged into the STL\n# output only. The STEP export above stays solid (baseplate + primitives).\nimported = import_stl("${importedMesh.filename}")\nimported_bounds = imported.bounding_box()\nimported = Pos(-(imported_bounds.min.X + imported_bounds.max.X) / 2, -(imported_bounds.min.Y + imported_bounds.max.Y) / 2, -(imported_bounds.min.Z + imported_bounds.max.Z) / 2) * imported\nimported = imported.scale(${importedMesh.scale_factor})\nimported = Pos(${importedMesh.x}, ${importedMesh.y}, ${importedMesh.z}) * imported\nstl_model = Compound(children=[result, imported])`
+    : '';
+
+  const generatedScript = `from build123d import Align, Box, Compound, Cylinder, Pos, Sphere, export_step, export_stl, import_stl
 
 # Baseplate parameters for ${activeVersion}
 length = ${cadParams.length}  # ${units}
@@ -158,9 +178,10 @@ for x in (-hole_x, hole_x):
         result -= cutter
 ${primitiveScript}
 ${holes.map((hole, index) => `\n# Extra through-hole ${index + 1}\nresult = result - Pos(${hole.x}, ${hole.y}, baseplate_z) * Cylinder(${hole.diameter / 2}, thickness + 2, align=(Align.CENTER, Align.CENTER, Align.CENTER))`).join('')}
+${importedMeshScript}
 
 export_step(result, "baseplate.step")
-export_stl(result, "baseplate.stl")
+export_stl(${importedMesh ? 'stl_model' : 'result'}, "baseplate.stl")
 `;
 
   // Auto-scroll Chat
@@ -201,6 +222,105 @@ export_stl(result, "baseplate.stl")
     ]);
   }, []);
 
+  const handleImportStl = async (file: File | undefined) => {
+    if (!file) return;
+    if (file.size > 25 * 1024 * 1024) {
+      setImportError('STL files must be 25 MB or smaller.');
+      return;
+    }
+    setImportError(null);
+    setIsImporting(true);
+    try {
+      const apiUrl = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000').replace(/\/+$/, '');
+      const response = await fetch(`${apiUrl}/imports`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-Filename': file.name,
+        },
+        body: file,
+      });
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => null) as { detail?: string } | null;
+        throw new Error(errorBody?.detail ?? `Upload failed (${response.status})`);
+      }
+      const uploadedMesh: ImportedMesh = await response.json();
+      setImportedMesh(uploadedMesh);
+      setModelArtifacts(null);
+    } catch (error) {
+      setImportError(error instanceof Error ? error.message : 'Unable to upload this STL file.');
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
+  const updateImportedMesh = (key: 'x' | 'y' | 'z' | 'scale_factor', value: number) => {
+    if (!Number.isFinite(value)) return;
+    const min = key === 'scale_factor' ? 0.01 : -5000;
+    const max = key === 'scale_factor' ? 100 : 5000;
+    if (value < min || value > max || !importedMesh) return;
+    setImportedMesh({ ...importedMesh, [key]: value });
+    setModelArtifacts(null);
+  };
+
+  // Save / Load / Export handlers
+  const handleSaveProject = (name: string) => {
+    const project: SavedProject = {
+      id: Date.now().toString(16) + Math.random().toString(16).slice(2, 8),
+      name,
+      savedAt: new Date().toISOString(),
+      activeVersion,
+      cadParams,
+      features,
+      holes,
+      importedMesh,
+      modelArtifacts,
+      history,
+      messages,
+      materialKey,
+      wireframe,
+      xrayMode,
+      showGrid,
+      showDimensions,
+    };
+    saveProject(project);
+    setShowSaveDialog(false);
+    setSavedBadge(true);
+    window.setTimeout(() => setSavedBadge(false), 2000);
+  };
+
+  const handleLoadProject = (project: SavedProject) => {
+    setActiveVersion(project.activeVersion);
+    setCadParams(project.cadParams);
+    setFeatures(project.features);
+    setHoles(project.holes);
+    setImportedMesh(project.importedMesh);
+    setModelArtifacts(project.modelArtifacts);
+    setHistory(project.history);
+    setMessages(project.messages);
+    setMaterialKey(project.materialKey);
+    setWireframe(project.wireframe);
+    setXrayMode(project.xrayMode);
+    setShowGrid(project.showGrid);
+    setShowDimensions(project.showDimensions);
+    // Reset transient UI state
+    setEditorError(null);
+    setImportError(null);
+    setShowProjectsModal(false);
+  };
+
+  const handleImportProjectFile = async (file: File) => {
+    setProjectImportError(null);
+    try {
+      const project = await importProjectFile(file);
+      saveProject(project);
+      // Immediately load the imported project
+      handleLoadProject(project);
+    } catch (error) {
+      setProjectImportError(error instanceof Error ? error.message : 'Could not import file.');
+    }
+  };
+
   // Handle Prompt Submission
   const handleSendMessage = async (textToSend?: string) => {
     const query = (textToSend ?? inputPrompt).trim();
@@ -236,6 +356,19 @@ export_stl(result, "baseplate.stl")
           },
           features,
           holes,
+          imported_mesh: importedMesh
+            ? {
+                id: importedMesh.id,
+                filename: importedMesh.filename,
+                length: importedMesh.length,
+                width: importedMesh.width,
+                height: importedMesh.height,
+                x: importedMesh.x,
+                y: importedMesh.y,
+                z: importedMesh.z,
+                scale_factor: importedMesh.scale_factor,
+              }
+            : null,
         }),
       });
 
@@ -274,6 +407,7 @@ export_stl(result, "baseplate.stl")
       };
       const returnedFeatures = result.features ?? features;
       const returnedHoles = result.holes ?? holes;
+      const returnedImportedMesh = result.imported_mesh ?? null;
       const version = `v1.${history.length}`;
       const generatedArtifacts = {
         stlUrl: result.files.stl_url,
@@ -282,6 +416,7 @@ export_stl(result, "baseplate.stl")
       setCadParams(returnedParams);
       setFeatures(returnedFeatures);
       setHoles(returnedHoles);
+      setImportedMesh(returnedImportedMesh);
       setModelArtifacts(generatedArtifacts);
       setHistory((previous) => [
         {
@@ -291,6 +426,7 @@ export_stl(result, "baseplate.stl")
           cadParams: returnedParams,
           features: returnedFeatures,
           holes: returnedHoles,
+          importedMesh: returnedImportedMesh,
           artifacts: generatedArtifacts,
         },
         ...previous,
@@ -442,6 +578,50 @@ export_stl(result, "baseplate.stl")
             <span>GPU Mesh Engine Active</span>
           </div>
 
+          {/* Projects button */}
+          <button
+            onClick={() => { setShowProjectsModal(true); setProjectImportError(null); }}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all shadow-sm ${
+              darkMode
+                ? 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-200'
+                : 'bg-white hover:bg-slate-100 border-slate-300 text-slate-800'
+            }`}
+            title="Open saved projects"
+          >
+            <FolderOpen className="w-4 h-4 text-cyan-400" />
+            <span className="font-mono text-[11px]">Projects</span>
+            {projects.length > 0 && (
+              <span className={`ml-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-bold ${darkMode ? 'bg-cyan-900 text-cyan-300' : 'bg-cyan-100 text-cyan-700'}`}>
+                {projects.length}
+              </span>
+            )}
+          </button>
+
+          {/* Save button */}
+          <button
+            onClick={() => setShowSaveDialog(true)}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all shadow-sm ${
+              savedBadge
+                ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-400'
+                : darkMode
+                  ? 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-200'
+                  : 'bg-white hover:bg-slate-100 border-slate-300 text-slate-800'
+            }`}
+            title="Save current project"
+          >
+            {savedBadge ? (
+              <>
+                <Check className="w-4 h-4 text-emerald-400" />
+                <span className="font-mono text-[11px]">Saved!</span>
+              </>
+            ) : (
+              <>
+                <Save className="w-4 h-4 text-cyan-400" />
+                <span className="font-mono text-[11px]">Save</span>
+              </>
+            )}
+          </button>
+
           <button 
             onClick={() => setDarkMode(!darkMode)} 
             className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all shadow-sm ${
@@ -581,6 +761,7 @@ export_stl(result, "baseplate.stl")
                       setCadParams(item.cadParams);
                       setFeatures(item.features);
                       setHoles(item.holes);
+                      setImportedMesh(item.importedMesh ?? null);
                       setModelArtifacts(item.artifacts);
                     }}
                     className={`w-full p-1.5 rounded-lg text-left text-[11px] font-mono flex items-center justify-between border transition ${
@@ -668,21 +849,31 @@ export_stl(result, "baseplate.stl")
 
             {/* Material Picker */}
             {activeTab === '3d' && (
-              <div className="hidden sm:flex items-center gap-2">
-                <span className={`text-[11px] font-mono ${theme.subText}`}>Material:</span>
-                {(Object.keys(MATERIALS) as MaterialKey[]).map((key) => (
-                  <button
-                    key={key}
-                    onClick={() => setMaterialKey(key)}
-                    className={`px-2 py-1 rounded text-[11px] font-mono border transition ${
-                      materialKey === key 
-                        ? (darkMode ? 'bg-slate-700 border-cyan-400 text-cyan-300' : 'bg-white border-cyan-600 text-cyan-800 shadow-sm') 
-                        : (darkMode ? 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800' : 'bg-slate-200/50 border-slate-300 text-slate-600 hover:bg-slate-200')
-                    }`}
-                  >
-                    {MATERIALS[key].name}
-                  </button>
-                ))}
+              <div className="flex items-center gap-2">
+                <span className={`hidden sm:inline text-[11px] font-mono ${theme.subText}`}>Material:</span>
+                {(Object.keys(MATERIALS) as MaterialKey[]).map((key) => {
+                  const swatch = `#${(darkMode ? MATERIALS[key].colorDark : MATERIALS[key].colorLight)
+                    .toString(16)
+                    .padStart(6, '0')}`;
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => setMaterialKey(key)}
+                      title={MATERIALS[key].name}
+                      className={`flex items-center gap-1.5 px-2 py-1 rounded text-[11px] font-mono border transition ${
+                        materialKey === key
+                          ? (darkMode ? 'bg-slate-700 border-cyan-400 text-cyan-300' : 'bg-white border-cyan-600 text-cyan-800 shadow-sm')
+                          : (darkMode ? 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800' : 'bg-slate-200/50 border-slate-300 text-slate-600 hover:bg-slate-200')
+                      }`}
+                    >
+                      <span
+                        className="w-3 h-3 rounded-full border border-black/20 shrink-0"
+                        style={{ backgroundColor: swatch }}
+                      />
+                      <span className="hidden md:inline">{MATERIALS[key].name}</span>
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -697,7 +888,9 @@ export_stl(result, "baseplate.stl")
                   cadParams={cadParams}
                   features={features}
                   holes={holes}
-                  stlUrl={modelArtifacts?.stlUrl ?? null}
+                  importedMesh={importedMesh}
+                  stlUrl={modelArtifacts?.stlUrl ?? importedMesh?.source_url ?? null}
+                  isGeneratedModel={modelArtifacts !== null}
                   materialKey={materialKey}
                   wireframe={wireframe}
                   xrayMode={xrayMode}
@@ -706,6 +899,14 @@ export_stl(result, "baseplate.stl")
                   darkMode={darkMode}
                   onStlLoadError={handleStlLoadError}
                 />
+
+                {/* Stale model notice */}
+                {importedMesh && !modelArtifacts && (
+                  <div className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-mono shadow-xl backdrop-blur-md ${darkMode ? 'bg-amber-950/90 border-amber-700/60 text-amber-300' : 'bg-amber-50/90 border-amber-300 text-amber-700'}`}>
+                    <Loader2 className="w-3.5 h-3.5 shrink-0" />
+                    Live preview — send a chat message or click &ldquo;Generate current design&rdquo; to merge the imported mesh into an exportable model.
+                  </div>
+                )}
 
                 {/* Viewport Controls */}
                 <div className={`absolute top-4 left-4 p-1.5 rounded-xl border flex flex-wrap gap-1 shadow-2xl z-20 backdrop-blur-md ${theme.cardBg}`}>
@@ -847,6 +1048,80 @@ export_stl(result, "baseplate.stl")
                         className="w-full accent-cyan-500 bg-slate-700 rounded-lg cursor-pointer h-1.5"
                       />
                     </div>
+                  </div>
+
+                  <div className={`pt-2 border-t ${theme.border} space-y-2 font-mono text-xs`}>
+                    <div className={`font-semibold uppercase tracking-wider ${darkMode ? 'text-cyan-400' : 'text-cyan-700'}`}>
+                      Continue from an STL mesh
+                    </div>
+                    <label className={`block ${theme.subText}`}>
+                      Import STL (max 25 MB)
+                      <input
+                        type="file"
+                        accept=".stl,model/stl"
+                        disabled={isGenerating || isImporting}
+                        onChange={(event) => {
+                          void handleImportStl(event.currentTarget.files?.[0]);
+                          event.currentTarget.value = '';
+                        }}
+                        className={`mt-1 w-full rounded border px-2 py-1.5 ${theme.innerInputBg}`}
+                      />
+                    </label>
+                    {isImporting && <p className={theme.subText}>Uploading and validating mesh…</p>}
+                    {importError && <p role="alert" className="text-rose-400">{importError}</p>}
+                    {importedMesh && (
+                      <div className={`space-y-2 rounded border p-2 ${theme.border}`}>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="min-w-0 truncate font-bold" title={importedMesh.filename}>
+                            {importedMesh.filename}
+                          </span>
+                          <button
+                            type="button"
+                            aria-label="Remove imported STL"
+                            disabled={isGenerating}
+                            onClick={() => {
+                              setImportedMesh(null);
+                              setModelArtifacts(null);
+                              setImportError(null);
+                            }}
+                            className="shrink-0 text-rose-400 hover:text-rose-300 disabled:opacity-50"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                        <p className={theme.subText}>Faceted mesh; move or scale it, then add CAD features in chat.</p>
+                        <div className="grid grid-cols-3 gap-2">
+                          {(['x', 'y', 'z'] as const).map((axis) => (
+                            <label key={axis} className={theme.subText}>
+                              {axis.toUpperCase()} (mm)
+                              <input
+                                type="number"
+                                min="-5000"
+                                max="5000"
+                                step="1"
+                                value={importedMesh[axis]}
+                                disabled={isGenerating}
+                                onChange={(event) => updateImportedMesh(axis, Number(event.target.value))}
+                                className={`mt-1 w-full rounded border px-2 py-1.5 ${theme.innerInputBg}`}
+                              />
+                            </label>
+                          ))}
+                        </div>
+                        <label className={`block ${theme.subText}`}>
+                          Uniform scale
+                          <input
+                            type="number"
+                            min="0.01"
+                            max="100"
+                            step="0.1"
+                            value={importedMesh.scale_factor}
+                            disabled={isGenerating}
+                            onChange={(event) => updateImportedMesh('scale_factor', Number(event.target.value))}
+                            className={`mt-1 w-full rounded border px-2 py-1.5 ${theme.innerInputBg}`}
+                          />
+                        </label>
+                      </div>
+                    )}
                   </div>
 
                   <div className={`pt-2 border-t ${theme.border} space-y-2 font-mono text-xs`}>
@@ -1041,17 +1316,38 @@ export_stl(result, "baseplate.stl")
               </>
             )}
 
-            {activeTab === '3d' && modelArtifacts?.stepUrl && (
-              <a
-                href={modelArtifacts.stepUrl}
-                className={`absolute bottom-4 left-4 z-20 flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-semibold shadow-xl backdrop-blur-md ${
-                  darkMode
-                    ? 'bg-slate-900/90 border-emerald-700 text-emerald-300 hover:bg-slate-800'
-                    : 'bg-white/90 border-emerald-300 text-emerald-700 hover:bg-emerald-50'
-                }`}
-              >
-                <Download className="w-4 h-4" /> Download STEP
-              </a>
+            {activeTab === '3d' && modelArtifacts && (
+              <div className="absolute bottom-4 left-4 z-20 flex flex-col gap-2">
+                <div className="flex gap-2">
+                  <a
+                    href={modelArtifacts.stlUrl}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-semibold shadow-xl backdrop-blur-md ${
+                      darkMode
+                        ? 'bg-slate-900/90 border-cyan-700 text-cyan-300 hover:bg-slate-800'
+                        : 'bg-white/90 border-cyan-300 text-cyan-700 hover:bg-cyan-50'
+                    }`}
+                  >
+                    <Download className="w-4 h-4" /> Download STL
+                  </a>
+                  <a
+                    href={modelArtifacts.stepUrl}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-semibold shadow-xl backdrop-blur-md ${
+                      darkMode
+                        ? 'bg-slate-900/90 border-emerald-700 text-emerald-300 hover:bg-slate-800'
+                        : 'bg-white/90 border-emerald-300 text-emerald-700 hover:bg-emerald-50'
+                    }`}
+                  >
+                    <Download className="w-4 h-4" /> Download STEP
+                  </a>
+                </div>
+                {importedMesh && (
+                  <p className={`max-w-xs rounded-lg px-2.5 py-1.5 text-[10px] font-mono shadow-lg backdrop-blur-md ${
+                    darkMode ? 'bg-amber-950/80 text-amber-300 border border-amber-800/50' : 'bg-amber-50/90 text-amber-700 border border-amber-200'
+                  }`}>
+                    STEP contains the solid baseplate and primitives only. The imported mesh is included in the STL.
+                  </p>
+                )}
+              </div>
             )}
 
             {/* VIEWPORT TAB 2: 2D BLUEPRINT */}
@@ -1060,6 +1356,7 @@ export_stl(result, "baseplate.stl")
                 cadParams={cadParams}
                 features={features}
                 holes={holes}
+                importedMesh={importedMesh}
                 units={units}
                 darkMode={darkMode}
                 showDimensions={showDimensions}
@@ -1102,6 +1399,30 @@ export_stl(result, "baseplate.stl")
         </div>
 
       </div>
+
+      {/* Save Dialog */}
+      {showSaveDialog && (
+        <SaveDialog
+          darkMode={darkMode}
+          defaultName={`Design – ${new Date().toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}`}
+          onSave={handleSaveProject}
+          onClose={() => setShowSaveDialog(false)}
+        />
+      )}
+
+      {/* Projects Modal */}
+      {showProjectsModal && (
+        <ProjectsModal
+          projects={projects}
+          darkMode={darkMode}
+          onClose={() => setShowProjectsModal(false)}
+          onLoad={handleLoadProject}
+          onDelete={deleteProject}
+          onExport={exportProject}
+          onImportFile={(file) => void handleImportProjectFile(file)}
+          importError={projectImportError}
+        />
+      )}
 
     </div>
   );

@@ -1,0 +1,22 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ArtifactBucketReadWrite",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject"
+      ],
+      "Resource": "arn:aws:s3:::text2shape-cad-artifacts-2026/*"
+    },
+    {
+      "Sid": "ReadLlmApiKeySecret",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:GetSecretValue"
+      ],
+      "Resource": "arn:aws:secretsmanager:us-east-2:111122223333:secret:text2shape/llm-api-key-*"
+    }
+  ]
+}

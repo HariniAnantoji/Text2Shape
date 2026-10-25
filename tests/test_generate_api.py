@@ -1,13 +1,15 @@
 import shutil
+import tempfile
 import unittest
 from unittest.mock import patch
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from build123d import Box, export_stl
 from fastapi.testclient import TestClient
 
 from ai_cad import CADOperation, CADPlan, LocalModelError
-from main import ARTIFACTS_DIR, app
+from main import ARTIFACTS_DIR, IMPORTS_DIR, app
 
 
 class GenerateEndpointTests(unittest.TestCase):
@@ -21,7 +23,7 @@ class GenerateEndpointTests(unittest.TestCase):
         self.plan_patcher.stop()
 
     @staticmethod
-    def default_plan(prompt, cad_params, features, holes):
+    def default_plan(prompt, cad_params, features, holes, imported_mesh=None):
         return CADPlan(
             reply="Generated from the current design.",
             operations=[
@@ -151,6 +153,72 @@ class GenerateEndpointTests(unittest.TestCase):
             file_response = self.client.get(urlsplit(file_url).path)
             self.assertEqual(file_response.status_code, 200)
             self.assertGreater(len(file_response.content), 0)
+
+    def test_uploads_stl_and_continues_generation_with_imported_mesh(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            stl_path = Path(temporary_directory) / "part.stl"
+            export_stl(Box(10, 20, 30), str(stl_path))
+            upload = self.client.post(
+                "/imports",
+                content=stl_path.read_bytes(),
+                headers={
+                    "Content-Type": "application/octet-stream",
+                    "X-Filename": "part.stl",
+                },
+            )
+
+        self.assertEqual(upload.status_code, 201)
+        imported = upload.json()
+        imported_id = imported["id"]
+        self.addCleanup((IMPORTS_DIR / f"{imported_id}.stl").unlink, missing_ok=True)
+        source_response = self.client.get(urlsplit(imported["source_url"]).path)
+        self.assertEqual(source_response.status_code, 200)
+        self.assertGreater(len(source_response.content), 0)
+
+        response = self.client.post(
+            "/generate",
+            json={
+                "prompt": "Add a box beside the imported mesh",
+                "imported_mesh": {key: value for key, value in imported.items() if key != "source_url"},
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "generated")
+        self.assertEqual(body["imported_mesh"]["id"], imported_id)
+        self.register_generated_file_cleanup(body)
+        for file_url in body["files"].values():
+            file_response = self.client.get(urlsplit(file_url).path)
+            self.assertEqual(file_response.status_code, 200)
+            self.assertGreater(len(file_response.content), 0)
+
+    def test_rejects_non_stl_upload(self):
+        response = self.client.post(
+            "/imports",
+            content=b"not an STL",
+            headers={"X-Filename": "part.obj"},
+        )
+        self.assertEqual(response.status_code, 415)
+
+    def test_rejects_invalid_stl_mesh(self):
+        response = self.client.post(
+            "/imports",
+            content=b"not geometry",
+            headers={"X-Filename": "part.stl"},
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_rejects_oversized_stl_before_reading_body(self):
+        response = self.client.post(
+            "/imports",
+            content=b"",
+            headers={
+                "X-Filename": "part.stl",
+                "Content-Length": str(25 * 1024 * 1024 + 1),
+            },
+        )
+        self.assertEqual(response.status_code, 413)
 
     def test_chat_adds_primitive_and_returns_updated_state(self):
         self.request_plan.side_effect = None

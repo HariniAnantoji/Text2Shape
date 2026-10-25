@@ -1,11 +1,12 @@
 import json
 import unittest
+import unittest.mock
 from io import BytesIO
 from urllib.error import HTTPError
 from unittest.mock import patch
 
 from ai_cad import CADOperation, CADPlan, LocalModelError, apply_cad_plan, request_cad_plan
-from cad_generator import BaseplateParams, BoxFeature, HoleFeature
+from cad_generator import BaseplateParams, BoxFeature, HoleFeature, ImportedMesh
 
 
 class CADPlanTests(unittest.TestCase):
@@ -91,6 +92,35 @@ class CADPlanTests(unittest.TestCase):
         self.assertEqual(result.status, "clarification")
         self.assertEqual(result.features, [original])
 
+    def test_moves_and_scales_imported_mesh(self):
+        imported_mesh = ImportedMesh(
+            id="a" * 32,
+            filename="part.stl",
+            length=10,
+            width=20,
+            height=30,
+        )
+        result = apply_cad_plan(
+            CADPlan(
+                reply="Moved and scaled the imported mesh.",
+                operations=[
+                    CADOperation(
+                        action="update_imported_mesh",
+                        x=25,
+                        scale_factor=2,
+                    )
+                ],
+            ),
+            self.params,
+            [],
+            [],
+            imported_mesh,
+        )
+        self.assertEqual(result.status, "generated")
+        self.assertEqual(result.imported_mesh.x, 25)
+        self.assertEqual(result.imported_mesh.scale_factor, 2)
+        self.assertEqual(imported_mesh.scale_factor, 1)
+
 
 class LocalModelClientTests(unittest.TestCase):
     def test_parses_ollama_structured_response_without_credentials(self):
@@ -146,6 +176,84 @@ class LocalModelClientTests(unittest.TestCase):
         with patch("ai_cad.urlopen", side_effect=ConnectionRefusedError):
             with self.assertRaisesRegex(LocalModelError, "Could not reach Ollama"):
                 request_cad_plan("Add a box", BaseplateParams(), [], [])
+
+
+class HostedModelClientTests(unittest.TestCase):
+    def _openai_style_body(self) -> bytes:
+        return json.dumps(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "reply": "Added the requested box.",
+                                    "operations": [
+                                        {
+                                            "action": "add_primitive",
+                                            "shape": "box",
+                                            "length": 30,
+                                            "width": 20,
+                                            "height": 10,
+                                        }
+                                    ],
+                                }
+                            )
+                        }
+                    }
+                ]
+            }
+        ).encode()
+
+    def test_uses_hosted_endpoint_and_bearer_key_when_configured(self):
+        mock_response = BytesIO(self._openai_style_body())
+        mock_response.__enter__ = lambda response: response
+        mock_response.__exit__ = lambda response, *args: None
+        env = {
+            "LLM_BASE_URL": "https://api.together.xyz/v1",
+            "LLM_MODEL": "meta-llama/Llama-3.1-8B-Instruct-Turbo",
+            "LLM_API_KEY": "sk-test-key",
+        }
+        with patch.dict("os.environ", env, clear=True):
+            with patch("ai_cad.urlopen", return_value=mock_response) as urlopen:
+                plan = request_cad_plan("Add a box", BaseplateParams(), [], [])
+
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, "https://api.together.xyz/v1/chat/completions")
+        self.assertEqual(request.headers["Authorization"], "Bearer sk-test-key")
+        payload = json.loads(request.data)
+        self.assertEqual(payload["model"], "meta-llama/Llama-3.1-8B-Instruct-Turbo")
+        self.assertEqual(payload["response_format"], {"type": "json_object"})
+        self.assertEqual(plan.operations[0].shape, "box")
+
+    def test_errors_when_base_url_set_but_no_key(self):
+        with patch.dict("os.environ", {"LLM_BASE_URL": "https://api.together.xyz/v1"}, clear=True):
+            with self.assertRaisesRegex(LocalModelError, "no API key was found"):
+                request_cad_plan("Add a box", BaseplateParams(), [], [])
+
+    def test_resolves_key_from_secrets_manager(self):
+        mock_response = BytesIO(self._openai_style_body())
+        mock_response.__enter__ = lambda response: response
+        mock_response.__exit__ = lambda response, *args: None
+        env = {
+            "LLM_BASE_URL": "https://api.together.xyz/v1",
+            "LLM_API_KEY_SECRET_ARN": "arn:aws:secretsmanager:us-east-2:111122223333:secret:text2shape/llm-api-key",
+            "AWS_REGION": "us-east-2",
+        }
+        fake_secrets_client = unittest.mock.Mock()
+        fake_secrets_client.get_secret_value.return_value = {
+            "SecretString": json.dumps({"LLM_API_KEY": "sk-from-secrets"})
+        }
+        fake_boto3 = unittest.mock.Mock()
+        fake_boto3.client.return_value = fake_secrets_client
+        with patch.dict("os.environ", env, clear=True):
+            with patch.dict("sys.modules", {"boto3": fake_boto3}):
+                with patch("ai_cad.urlopen", return_value=mock_response) as urlopen:
+                    request_cad_plan("Add a box", BaseplateParams(), [], [])
+
+        fake_boto3.client.assert_called_once_with("secretsmanager", region_name="us-east-2")
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.headers["Authorization"], "Bearer sk-from-secrets")
 
 
 if __name__ == "__main__":

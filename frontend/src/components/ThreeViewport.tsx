@@ -2,13 +2,15 @@ import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import { MATERIALS } from '../textToShapeData';
-import type { CadParams, HoleFeature, MaterialKey, PrimitiveFeature } from '../types';
+import type { CadParams, HoleFeature, ImportedMesh, MaterialKey, PrimitiveFeature } from '../types';
 
 interface ThreeViewportProps {
   cadParams: CadParams;
   features: PrimitiveFeature[];
   holes: HoleFeature[];
+  importedMesh: ImportedMesh | null;
   stlUrl: string | null;
+  isGeneratedModel: boolean;
   materialKey: MaterialKey;
   wireframe: boolean;
   xrayMode: boolean;
@@ -84,7 +86,9 @@ export function ThreeViewport({
   cadParams,
   features,
   holes,
+  importedMesh,
   stlUrl,
+  isGeneratedModel,
   materialKey,
   wireframe,
   xrayMode,
@@ -112,6 +116,17 @@ export function ThreeViewport({
       minZ: cadParams.z - cadParams.thickness / 2,
       maxZ: cadParams.z + cadParams.thickness / 2,
     };
+    if (importedMesh && !isGeneratedModel) {
+      const halfLength = importedMesh.length * importedMesh.scale_factor / 2;
+      const halfWidth = importedMesh.width * importedMesh.scale_factor / 2;
+      const halfHeight = importedMesh.height * importedMesh.scale_factor / 2;
+      bounds.minX = Math.min(bounds.minX, importedMesh.x - halfLength);
+      bounds.maxX = Math.max(bounds.maxX, importedMesh.x + halfLength);
+      bounds.minY = Math.min(bounds.minY, importedMesh.y - halfWidth);
+      bounds.maxY = Math.max(bounds.maxY, importedMesh.y + halfWidth);
+      bounds.minZ = Math.min(bounds.minZ, importedMesh.z - halfHeight);
+      bounds.maxZ = Math.max(bounds.maxZ, importedMesh.z + halfHeight);
+    }
     for (const feature of features) {
       const halfX = feature.shape === 'box' ? feature.length / 2 : feature.diameter / 2;
       const halfY = feature.shape === 'box' ? feature.width / 2 : feature.diameter / 2;
@@ -138,7 +153,8 @@ export function ThreeViewport({
       bounds.maxZ - bounds.minZ,
     );
     const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, largestDimension * 10);
-    camera.position.set(largestDimension * 1.4, largestDimension * 1.2, largestDimension * 1.6);
+    // Position camera straight ahead along Z so the plate face faces the viewer directly.
+    camera.position.set(0, 0, largestDimension * 2.2);
     camera.lookAt(0, 0, 0);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -163,8 +179,9 @@ export function ThreeViewport({
         darkMode ? 0x334155 : 0xcbd5e1,
         darkMode ? 0x1e293b : 0xe2e8f0,
       );
+      // Rotate grid to stand vertically as a back-wall behind the plate.
       gridHelper.rotation.x = Math.PI / 2;
-      gridHelper.position.set(-center.x, -center.y, cadParams.z - cadParams.thickness / 2 - 5 - center.z);
+      gridHelper.position.set(0, 0, cadParams.z - cadParams.thickness / 2 - 5 - center.z);
       scene.add(gridHelper);
     }
 
@@ -205,6 +222,15 @@ export function ThreeViewport({
             return;
           }
           geometry.computeVertexNormals();
+          if (importedMesh && !isGeneratedModel) {
+            geometry.computeBoundingBox();
+            const sourceCenter = geometry.boundingBox?.getCenter(new THREE.Vector3());
+            if (sourceCenter) {
+              geometry.translate(-sourceCenter.x, -sourceCenter.y, -sourceCenter.z);
+            }
+            geometry.scale(importedMesh.scale_factor, importedMesh.scale_factor, importedMesh.scale_factor);
+            geometry.translate(importedMesh.x, importedMesh.y, importedMesh.z);
+          }
           previewGroup.removeFromParent();
           disposePreview();
           modelGroup.add(new THREE.Mesh(geometry, meshMaterial));
@@ -241,7 +267,6 @@ export function ThreeViewport({
     let animationFrameId: number;
     const animate = () => {
       animationFrameId = requestAnimationFrame(animate);
-      if (!isDragging) modelGroup.rotation.y += 0.003;
       renderer.render(scene, camera);
     };
     animate();
@@ -273,7 +298,7 @@ export function ThreeViewport({
       renderer.forceContextLoss();
       if (container.contains(renderer.domElement)) container.removeChild(renderer.domElement);
     };
-  }, [cadParams, features, holes, stlUrl, materialKey, wireframe, xrayMode, showGrid, showDimensions, darkMode, onStlLoadError]);
+  }, [cadParams, features, holes, importedMesh, stlUrl, isGeneratedModel, materialKey, wireframe, xrayMode, showGrid, showDimensions, darkMode, onStlLoadError]);
 
   return (
     <div className="relative h-full w-full">

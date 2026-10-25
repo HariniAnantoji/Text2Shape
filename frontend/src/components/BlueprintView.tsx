@@ -1,16 +1,17 @@
 import React from 'react';
-import type { CadParams, HoleFeature, PrimitiveFeature } from '../types';
+import type { CadParams, HoleFeature, ImportedMesh, PrimitiveFeature } from '../types';
 
 interface BlueprintViewProps {
   cadParams: CadParams;
   features: PrimitiveFeature[];
   holes: HoleFeature[];
+  importedMesh: ImportedMesh | null;
   units: string;
   darkMode: boolean;
   showDimensions: boolean;
 }
 
-export function BlueprintView({ cadParams, features, holes, units, darkMode, showDimensions }: BlueprintViewProps) {
+export function BlueprintView({ cadParams, features, holes, importedMesh, units, darkMode, showDimensions }: BlueprintViewProps) {
   const bounds = {
     minX: cadParams.x - cadParams.length / 2,
     maxX: cadParams.x + cadParams.length / 2,
@@ -24,6 +25,14 @@ export function BlueprintView({ cadParams, features, holes, units, darkMode, sho
     bounds.maxX = Math.max(bounds.maxX, feature.x + halfX);
     bounds.minY = Math.min(bounds.minY, feature.y - halfY);
     bounds.maxY = Math.max(bounds.maxY, feature.y + halfY);
+  }
+  if (importedMesh) {
+    const halfLength = importedMesh.length * importedMesh.scale_factor / 2;
+    const halfWidth = importedMesh.width * importedMesh.scale_factor / 2;
+    bounds.minX = Math.min(bounds.minX, importedMesh.x - halfLength);
+    bounds.maxX = Math.max(bounds.maxX, importedMesh.x + halfLength);
+    bounds.minY = Math.min(bounds.minY, importedMesh.y - halfWidth);
+    bounds.maxY = Math.max(bounds.maxY, importedMesh.y + halfWidth);
   }
   const centerX = (bounds.minX + bounds.maxX) / 2;
   const centerY = (bounds.minY + bounds.maxY) / 2;
@@ -77,6 +86,19 @@ export function BlueprintView({ cadParams, features, holes, units, darkMode, sho
                 <title>{`Extra hole ${index + 1}: Ø${hole.diameter} mm`}</title>
               </circle>
             ))}
+            {importedMesh && (
+              <rect
+                x={(importedMesh.x - centerX - importedMesh.length * importedMesh.scale_factor / 2) * scale}
+                y={-(importedMesh.y - centerY + importedMesh.width * importedMesh.scale_factor / 2) * scale}
+                width={importedMesh.length * importedMesh.scale_factor * scale}
+                height={importedMesh.width * importedMesh.scale_factor * scale}
+                stroke="currentColor"
+                strokeDasharray="2,2"
+                strokeWidth="1.5"
+              >
+                <title>{`Imported mesh: ${importedMesh.filename} (bounding outline)`}</title>
+              </rect>
+            )}
             {features.map((feature, index) => {
               if (feature.shape === 'box') {
                 return (
