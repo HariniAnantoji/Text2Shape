@@ -4,15 +4,15 @@ import type { ChatMessage } from './types';
 export const QUICK_PROMPT_PILLS = [
   "Create a baseplate with four corner holes",
   "Make the baseplate thicker",
-  "Make the baseplate longer",
-  "Reduce the hole spacing from the edges"
+  "Add a 20 mm box on top",
+  "Add a 6 mm through-hole in the center"
 ];
 
 export const INITIAL_MESSAGES: ChatMessage[] = [
   {
     id: 1,
     sender: 'ai',
-    text: "Welcome to Text to Shape! I'm your assistant for generating parametric baseplates. Set dimensions in the controls, then describe your design.",
+    text: "Welcome to Text to Shape! Describe what to add or change: ask for holes, primitives, positions, or sizes, and I’ll update the CAD model.",
     timestamp: '10:42 AM',
     version: null
   },

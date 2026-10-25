@@ -92,11 +92,13 @@ class PromptParserTests(unittest.TestCase):
         self.assertEqual(result.status, "clarification")
         self.assertEqual(result.cad_params, self.current)
 
-    def test_unsupported_object_does_not_change_parameters(self):
+    def test_make_sphere_adds_a_primitive_without_changing_baseplate(self):
         result = interpret_prompt("Make a sphere", self.current)
 
-        self.assertEqual(result.status, "unsupported")
+        self.assertEqual(result.status, "generated")
         self.assertEqual(result.cad_params, self.current)
+        self.assertEqual(len(result.features), 1)
+        self.assertEqual(result.features[0].shape, "sphere")
 
     def test_invalid_hole_clearance_asks_for_clarification(self):
         result = interpret_prompt("Make it 20 × 10 mm with 12 mm holes", self.current)

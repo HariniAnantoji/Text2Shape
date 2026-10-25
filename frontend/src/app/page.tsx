@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { BlueprintView } from '../components/BlueprintView';
 import { ThreeViewport } from '../components/ThreeViewport';
 import { INITIAL_MESSAGES, MATERIALS, QUICK_PROMPT_PILLS } from '../textToShapeData';
-import type { CadParams, ChatMessage, GenerateResponse, MaterialKey, ModelArtifacts, ModelVersion } from '../types';
+import type { CadParams, ChatMessage, GenerateResponse, HoleFeature, MaterialKey, ModelArtifacts, ModelVersion, PrimitiveFeature } from '../types';
 import { 
   Box, 
   Cpu, 
@@ -28,7 +28,9 @@ import {
   History,
   Bot,
   User,
-  ChevronDown
+  ChevronDown,
+  Plus,
+  Trash2,
 } from 'lucide-react';
 
 // --- MAIN APP COMPONENT ---
@@ -40,6 +42,7 @@ export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>(INITIAL_MESSAGES);
   const [inputPrompt, setInputPrompt] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [editorError, setEditorError] = useState<string | null>(null);
   const [modelArtifacts, setModelArtifacts] = useState<ModelArtifacts | null>(null);
   const [activeVersion, setActiveVersion] = useState('v1.0');
   const chatBottomRef = useRef<HTMLDivElement>(null);
@@ -57,7 +60,12 @@ export default function App() {
         thickness: 8,
         holeDiameter: 6,
         edgeOffset: 10,
+        x: 0,
+        y: 0,
+        z: 0,
       },
+      features: [],
+      holes: [],
       artifacts: null,
     },
   ]);
@@ -78,18 +86,54 @@ export default function App() {
     thickness: 8,
     holeDiameter: 6,
     edgeOffset: 10,
+    x: 0,
+    y: 0,
+    z: 0,
+  });
+  const [features, setFeatures] = useState<PrimitiveFeature[]>([]);
+  const [holes, setHoles] = useState<HoleFeature[]>([]);
+  const [primitiveShape, setPrimitiveShape] = useState<'box' | 'cylinder' | 'sphere'>('box');
+  const [primitiveDraft, setPrimitiveDraft] = useState({
+    length: 20,
+    width: 20,
+    height: 20,
+    diameter: 20,
+    x: 0,
+    y: 0,
+    z: 10,
   });
 
   // Dynamic Metrics Calculation
   const metrics = useMemo(() => {
     const holeRadius = cadParams.holeDiameter / 2;
-    const volume = ((cadParams.length * cadParams.width - 4 * Math.PI * holeRadius ** 2) * cadParams.thickness / 1000).toFixed(2);
+    const baseplateVolume = (
+      (cadParams.length * cadParams.width - 4 * Math.PI * holeRadius ** 2)
+      * cadParams.thickness
+    ) - holes.reduce((volume, hole) => volume + Math.PI * (hole.diameter / 2) ** 2 * cadParams.thickness, 0);
+    const featureVolume = features.reduce((total, feature) => {
+      if (feature.shape === 'box') return total + feature.length * feature.width * feature.height;
+      if (feature.shape === 'cylinder') {
+        return total + Math.PI * (feature.diameter / 2) ** 2 * feature.height;
+      }
+      return total + (4 / 3) * Math.PI * (feature.diameter / 2) ** 3;
+    }, 0);
+    const volume = ((baseplateVolume + featureVolume) / 1000).toFixed(2);
     const mass = (Number(volume) * 7.85).toFixed(1);
     const boundingBox = `${cadParams.length} x ${cadParams.width} x ${cadParams.thickness} ${units}`;
     return { volume, mass, boundingBox };
-  }, [cadParams, units]);
+  }, [cadParams, features, holes, units]);
 
-  const generatedScript = `from build123d import Align, Box, Cylinder, Pos, export_step, export_stl
+  const primitiveScript = features.map((feature, index) => {
+    if (feature.shape === 'box') {
+      return `\n# Added box ${index + 1}\nresult = result + Pos(${feature.x}, ${feature.y}, ${feature.z}) * Box(${feature.length}, ${feature.width}, ${feature.height}, align=(Align.CENTER, Align.CENTER, Align.CENTER))`;
+    }
+    if (feature.shape === 'cylinder') {
+      return `\n# Added cylinder ${index + 1}\nresult = result + Pos(${feature.x}, ${feature.y}, ${feature.z}) * Cylinder(${feature.diameter / 2}, ${feature.height}, align=(Align.CENTER, Align.CENTER, Align.CENTER))`;
+    }
+    return `\n# Added sphere ${index + 1}\nresult = result + Pos(${feature.x}, ${feature.y}, ${feature.z}) * Sphere(${feature.diameter / 2})`;
+  }).join('\n');
+
+  const generatedScript = `from build123d import Align, Box, Cylinder, Pos, Sphere, export_step, export_stl
 
 # Baseplate parameters for ${activeVersion}
 length = ${cadParams.length}  # ${units}
@@ -98,17 +142,22 @@ thickness = ${cadParams.thickness}  # ${units}
 hole_diameter = ${cadParams.holeDiameter}  # ${units}
 edge_offset = ${cadParams.edgeOffset}  # ${units}
 
-result = Box(length, width, thickness, align=(Align.CENTER, Align.CENTER, Align.CENTER))
+baseplate_x = ${cadParams.x}
+baseplate_y = ${cadParams.y}
+baseplate_z = ${cadParams.z}
+result = Pos(baseplate_x, baseplate_y, baseplate_z) * Box(length, width, thickness, align=(Align.CENTER, Align.CENTER, Align.CENTER))
 hole_x = length / 2 - edge_offset
 hole_y = width / 2 - edge_offset
 for x in (-hole_x, hole_x):
     for y in (-hole_y, hole_y):
-        cutter = Pos(x, y, 0) * Cylinder(
+        cutter = Pos(baseplate_x + x, baseplate_y + y, baseplate_z) * Cylinder(
             hole_diameter / 2,
             thickness + 2,
             align=(Align.CENTER, Align.CENTER, Align.CENTER),
         )
         result -= cutter
+${primitiveScript}
+${holes.map((hole, index) => `\n# Extra through-hole ${index + 1}\nresult = result - Pos(${hole.x}, ${hole.y}, baseplate_z) * Cylinder(${hole.diameter / 2}, thickness + 2, align=(Align.CENTER, Align.CENTER, Align.CENTER))`).join('')}
 
 export_step(result, "baseplate.step")
 export_stl(result, "baseplate.stl")
@@ -120,6 +169,15 @@ export_stl(result, "baseplate.stl")
   }, [messages, isGenerating]);
 
   const updateCadParam = (key: keyof CadParams, value: number) => {
+    if (!Number.isFinite(value)) {
+      setEditorError('Enter a valid number for the baseplate.');
+      return;
+    }
+    if ((key === 'x' || key === 'y' || key === 'z') && (value < -500 || value > 500)) {
+      setEditorError('Baseplate position must be between -500 and 500 mm.');
+      return;
+    }
+    setEditorError(null);
     setCadParams((current) => {
       const next = { ...current, [key]: value };
       const maxEdgeOffset = Math.min(next.length, next.width) / 2 - 1;
@@ -172,12 +230,18 @@ export_stl(result, "baseplate.stl")
             thickness: cadParams.thickness,
             hole_diameter: cadParams.holeDiameter,
             edge_offset: cadParams.edgeOffset,
+            x: cadParams.x,
+            y: cadParams.y,
+            z: cadParams.z,
           },
+          features,
+          holes,
         }),
       });
 
       if (!response.ok) {
-        throw new Error(`API request failed (${response.status})`);
+        const errorBody = await response.json().catch(() => null) as { detail?: string } | null;
+        throw new Error(errorBody?.detail ?? `API request failed (${response.status})`);
       }
 
       const result: GenerateResponse = await response.json();
@@ -204,13 +268,20 @@ export_stl(result, "baseplate.stl")
         thickness: result.cad_params.thickness,
         holeDiameter: result.cad_params.hole_diameter,
         edgeOffset: result.cad_params.edge_offset,
+        x: result.cad_params.x ?? cadParams.x,
+        y: result.cad_params.y ?? cadParams.y,
+        z: result.cad_params.z ?? cadParams.z,
       };
+      const returnedFeatures = result.features ?? features;
+      const returnedHoles = result.holes ?? holes;
       const version = `v1.${history.length}`;
       const generatedArtifacts = {
         stlUrl: result.files.stl_url,
         stepUrl: result.files.step_url,
       };
       setCadParams(returnedParams);
+      setFeatures(returnedFeatures);
+      setHoles(returnedHoles);
       setModelArtifacts(generatedArtifacts);
       setHistory((previous) => [
         {
@@ -218,6 +289,8 @@ export_stl(result, "baseplate.stl")
           title: query.slice(0, 24),
           time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           cadParams: returnedParams,
+          features: returnedFeatures,
+          holes: returnedHoles,
           artifacts: generatedArtifacts,
         },
         ...previous,
@@ -262,6 +335,73 @@ export_stl(result, "baseplate.stl")
       setCopyError(true);
     }
   };
+
+  const addPrimitive = () => {
+    if (features.length >= 20 || !primitiveDraftValid) return;
+    const id = crypto.randomUUID();
+    const placement = { id, x: primitiveDraft.x, y: primitiveDraft.y, z: primitiveDraft.z };
+    let feature: PrimitiveFeature;
+    if (primitiveShape === 'box') {
+      feature = {
+        ...placement,
+        shape: 'box',
+        length: primitiveDraft.length,
+        width: primitiveDraft.width,
+        height: primitiveDraft.height,
+      };
+    } else if (primitiveShape === 'cylinder') {
+      feature = {
+        ...placement,
+        shape: 'cylinder',
+        diameter: primitiveDraft.diameter,
+        height: primitiveDraft.height,
+      };
+    } else {
+      feature = { ...placement, shape: 'sphere', diameter: primitiveDraft.diameter };
+    }
+    setFeatures((current) => [...current, feature]);
+    setModelArtifacts(null);
+  };
+
+  const removePrimitive = (id: string) => {
+    setFeatures((current) => current.filter((feature) => feature.id !== id));
+    setModelArtifacts(null);
+  };
+
+  const updatePrimitive = (
+    id: string,
+    field: 'x' | 'y' | 'z' | 'length' | 'width' | 'height' | 'diameter',
+    value: number,
+  ) => {
+    const currentFeature = features.find((feature) => feature.id === id);
+    if (!currentFeature) return;
+    const updatedFeature = { ...currentFeature, [field]: value } as PrimitiveFeature;
+    const validPosition = [updatedFeature.x, updatedFeature.y, updatedFeature.z]
+      .every((value) => Number.isFinite(value) && value >= -500 && value <= 500);
+    const dimensions = updatedFeature.shape === 'box'
+      ? [updatedFeature.length, updatedFeature.width, updatedFeature.height]
+      : updatedFeature.shape === 'cylinder'
+        ? [updatedFeature.diameter, updatedFeature.height]
+        : [updatedFeature.diameter];
+    if (!validPosition || !dimensions.every((value) => Number.isFinite(value) && value > 0 && value <= 500)) {
+      setEditorError('Primitive dimensions must be greater than 0 and at most 500 mm; positions must be between -500 and 500 mm.');
+      return;
+    }
+    setEditorError(null);
+    setFeatures((current) => current.map((feature) => (
+      feature.id === id ? updatedFeature : feature
+    )));
+    setModelArtifacts(null);
+  };
+
+  const primitiveDraftValid = [primitiveDraft.x, primitiveDraft.y, primitiveDraft.z]
+    .every((value) => Number.isFinite(value) && value >= -500 && value <= 500)
+    && (primitiveShape === 'box'
+      ? [primitiveDraft.length, primitiveDraft.width, primitiveDraft.height]
+        .every((value) => Number.isFinite(value) && value > 0 && value <= 500)
+      : [primitiveDraft.diameter].every((value) => Number.isFinite(value) && value > 0 && value <= 500)
+        && (primitiveShape !== 'cylinder'
+          || (Number.isFinite(primitiveDraft.height) && primitiveDraft.height > 0 && primitiveDraft.height <= 500)));
 
   const theme = {
     bg: darkMode ? 'bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-900',
@@ -439,6 +579,8 @@ export_stl(result, "baseplate.stl")
                     onClick={() => {
                       setActiveVersion(item.version);
                       setCadParams(item.cadParams);
+                      setFeatures(item.features);
+                      setHoles(item.holes);
                       setModelArtifacts(item.artifacts);
                     }}
                     className={`w-full p-1.5 rounded-lg text-left text-[11px] font-mono flex items-center justify-between border transition ${
@@ -470,7 +612,7 @@ export_stl(result, "baseplate.stl")
                   type="text"
                   value={inputPrompt}
                   onChange={(e) => setInputPrompt(e.target.value)}
-                  placeholder="Ask Text to Shape to modify geometry..."
+                  placeholder="Add a box, drill a hole, move a feature, or change its size..."
                   disabled={isGenerating}
                   className={`w-full py-2.5 px-3.5 rounded-xl border text-xs outline-none transition font-mono disabled:opacity-50 ${theme.innerInputBg}`}
                 />
@@ -553,11 +695,14 @@ export_stl(result, "baseplate.stl")
               <>
                 <ThreeViewport 
                   cadParams={cadParams}
+                  features={features}
+                  holes={holes}
                   stlUrl={modelArtifacts?.stlUrl ?? null}
                   materialKey={materialKey}
                   wireframe={wireframe}
                   xrayMode={xrayMode}
                   showGrid={showGrid}
+                  showDimensions={showDimensions}
                   darkMode={darkMode}
                   onStlLoadError={handleStlLoadError}
                 />
@@ -595,7 +740,7 @@ export_stl(result, "baseplate.stl")
                 </div>
 
                 {/* Dynamic Parameter Inspector */}
-                <div className={`absolute top-4 right-4 w-64 p-3.5 rounded-2xl border space-y-3 z-20 shadow-2xl backdrop-blur-md ${theme.cardBg}`}>
+                <div className={`absolute top-4 right-4 w-80 max-h-[calc(100%-2rem)] overflow-y-auto p-3.5 rounded-2xl border space-y-3 z-20 shadow-2xl backdrop-blur-md ${theme.cardBg}`}>
                   <div className={`flex items-center justify-between text-xs font-semibold ${darkMode ? 'text-cyan-400' : 'text-cyan-700'} uppercase tracking-wider border-b ${theme.border} pb-2`}>
                     <span className="flex items-center gap-1.5"><Sliders className="w-3.5 h-3.5" /> Baseplate Parameters</span>
                   </div>
@@ -648,6 +793,26 @@ export_stl(result, "baseplate.stl")
                         className="w-full accent-cyan-500 bg-slate-700 rounded-lg cursor-pointer h-1.5"
                       />
                     </div>
+                    <div>
+                      <div className={theme.subText}>Baseplate position (mm)</div>
+                      <div className="mt-1 grid grid-cols-3 gap-2">
+                        {(['x', 'y', 'z'] as const).map((axis) => (
+                          <label key={axis} className={theme.subText}>
+                            {axis.toUpperCase()}
+                            <input
+                              type="number"
+                              min="-500"
+                              max="500"
+                              step="1"
+                              value={cadParams[axis]}
+                              disabled={isGenerating}
+                              onChange={(event) => updateCadParam(axis, Number(event.target.value))}
+                              className={`mt-1 w-full rounded border px-2 py-1.5 ${theme.innerInputBg}`}
+                            />
+                          </label>
+                        ))}
+                      </div>
+                    </div>
 
                     <div>
                       <div className="flex justify-between mb-1">
@@ -684,10 +849,178 @@ export_stl(result, "baseplate.stl")
                     </div>
                   </div>
 
+                  <div className={`pt-2 border-t ${theme.border} space-y-2 font-mono text-xs`}>
+                    <div className={`font-semibold uppercase tracking-wider ${darkMode ? 'text-cyan-400' : 'text-cyan-700'}`}>
+                      Add a primitive
+                    </div>
+                    <label className={`block ${theme.subText}`}>
+                      Shape
+                      <select
+                        value={primitiveShape}
+                        disabled={isGenerating || features.length >= 20}
+                        onChange={(event) => setPrimitiveShape(event.target.value as 'box' | 'cylinder' | 'sphere')}
+                        className={`mt-1 w-full rounded border px-2 py-1.5 ${theme.innerInputBg}`}
+                      >
+                        <option value="box">Box</option>
+                        <option value="cylinder">Cylinder</option>
+                        <option value="sphere">Sphere</option>
+                      </select>
+                    </label>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      {(primitiveShape === 'box'
+                        ? [['length', 'Length'], ['width', 'Width'], ['height', 'Height']]
+                        : primitiveShape === 'cylinder'
+                          ? [['diameter', 'Diameter'], ['height', 'Height']]
+                          : [['diameter', 'Diameter']]
+                      ).map(([key, label]) => (
+                        <label key={key} className={theme.subText}>
+                          {label} (mm)
+                          <input
+                            type="number"
+                            min="1"
+                            max="500"
+                            step="1"
+                            value={primitiveDraft[key as keyof typeof primitiveDraft]}
+                            disabled={isGenerating || features.length >= 20}
+                            onChange={(event) => setPrimitiveDraft((draft) => ({
+                              ...draft,
+                              [key]: Number(event.target.value),
+                            }))}
+                            className={`mt-1 w-full rounded border px-2 py-1.5 ${theme.innerInputBg}`}
+                          />
+                        </label>
+                      ))}
+                    </div>
+
+                    <div>
+                      <div className={theme.subText}>Center position (mm)</div>
+                      <div className="grid grid-cols-3 gap-2 mt-1">
+                        {(['x', 'y', 'z'] as const).map((axis) => (
+                          <label key={axis} className={theme.subText}>
+                            {axis.toUpperCase()}
+                            <input
+                              type="number"
+                              min="-500"
+                              max="500"
+                              step="1"
+                              value={primitiveDraft[axis]}
+                              disabled={isGenerating || features.length >= 20}
+                              onChange={(event) => setPrimitiveDraft((draft) => ({
+                                ...draft,
+                                [axis]: Number(event.target.value),
+                              }))}
+                              className={`mt-1 w-full rounded border px-2 py-1.5 ${theme.innerInputBg}`}
+                            />
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={addPrimitive}
+                      disabled={isGenerating || features.length >= 20 || !primitiveDraftValid}
+                      className="w-full rounded-lg border border-cyan-500/40 bg-cyan-500/15 px-2 py-1.5 font-bold text-cyan-500 disabled:opacity-50"
+                    >
+                      <Plus className="mr-1 inline h-3.5 w-3.5" /> Add {primitiveShape}
+                    </button>
+
+                    {features.length > 0 && (
+                      <div className="space-y-1">
+                        {features.map((feature, index) => (
+                          <div key={feature.id} className={`space-y-2 rounded border p-2 ${theme.border}`}>
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-bold">
+                                {index + 1}. {feature.shape}
+                              </span>
+                              <button
+                                type="button"
+                                aria-label={`Remove ${feature.shape} ${index + 1}`}
+                                disabled={isGenerating}
+                                onClick={() => removePrimitive(feature.id)}
+                                className="shrink-0 text-rose-400 hover:text-rose-300 disabled:opacity-50"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                            <div className="grid grid-cols-3 gap-2">
+                              {(['x', 'y', 'z'] as const).map((axis) => (
+                                <label key={axis} className={theme.subText}>
+                                  {axis.toUpperCase()} (mm)
+                                  <input
+                                    aria-label={`Feature ${index + 1} ${axis.toUpperCase()} (mm)`}
+                                    type="number"
+                                    min="-500"
+                                    max="500"
+                                    step="1"
+                                    value={feature[axis]}
+                                    disabled={isGenerating}
+                                    onChange={(event) => updatePrimitive(feature.id, axis, Number(event.target.value))}
+                                    className={`mt-1 w-full rounded border px-2 py-1 ${theme.innerInputBg}`}
+                                  />
+                                </label>
+                              ))}
+                            </div>
+                            <div className="grid grid-cols-3 gap-2">
+                              {(feature.shape === 'box'
+                                ? ([
+                                    ['length', 'Length', feature.length],
+                                    ['width', 'Width', feature.width],
+                                    ['height', 'Height', feature.height],
+                                  ] as const)
+                                : feature.shape === 'cylinder'
+                                  ? ([
+                                      ['diameter', 'Diameter', feature.diameter],
+                                      ['height', 'Height', feature.height],
+                                    ] as const)
+                                  : ([['diameter', 'Diameter', feature.diameter]] as const)
+                              ).map(([key, label, value]) => (
+                                <label key={key} className={theme.subText}>
+                                  {label} (mm)
+                                  <input
+                                    aria-label={`Feature ${index + 1} ${label} (mm)`}
+                                    type="number"
+                                    min="1"
+                                    max="500"
+                                    step="1"
+                                    value={value}
+                                    disabled={isGenerating}
+                                    onChange={(event) => updatePrimitive(feature.id, key, Number(event.target.value))}
+                                    className={`mt-1 w-full rounded border px-2 py-1 ${theme.innerInputBg}`}
+                                  />
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {editorError && (
+                      <p role="alert" className="text-rose-400">
+                        {editorError}
+                      </p>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleSendMessage(
+                        `Create a ${cadParams.length} x ${cadParams.width} mm baseplate with ${cadParams.holeDiameter} mm holes`,
+                      )}
+                      disabled={isGenerating}
+                      className="w-full rounded-lg bg-gradient-to-r from-cyan-500 to-emerald-500 px-2 py-2 font-bold text-slate-950 disabled:opacity-50"
+                    >
+                      {isGenerating ? 'Generating…' : 'Generate current design'}
+                    </button>
+                    <p className={theme.subText}>
+                      Four corner holes are included. Add up to 20 box, cylinder, or sphere features.
+                    </p>
+                  </div>
+
                   {/* Physical Stats */}
                   <div className={`pt-2 border-t ${theme.border} space-y-1.5 font-mono text-[11px]`}>
                     <div className="flex justify-between">
-                      <span className={theme.subText}>Volume:</span>
+                      <span className={theme.subText}>Approx. Volume:</span>
                       <span className="font-bold">{metrics.volume} cm³</span>
                     </div>
                     <div className="flex justify-between">
@@ -698,6 +1031,11 @@ export_stl(result, "baseplate.stl")
                       <span className={theme.subText}>Est. Weight:</span>
                       <span className="text-emerald-500 font-bold">{metrics.mass} g</span>
                     </div>
+                    {features.length > 0 && (
+                      <p className={`${theme.subText} text-[9px]`}>
+                        Approximation adds feature volumes and may overcount overlaps.
+                      </p>
+                    )}
                   </div>
                 </div>
               </>
@@ -718,7 +1056,14 @@ export_stl(result, "baseplate.stl")
 
             {/* VIEWPORT TAB 2: 2D BLUEPRINT */}
             {activeTab === '2d' && (
-              <BlueprintView cadParams={cadParams} units={units} darkMode={darkMode} />
+              <BlueprintView
+                cadParams={cadParams}
+                features={features}
+                holes={holes}
+                units={units}
+                darkMode={darkMode}
+                showDimensions={showDimensions}
+              />
             )}
 
             {/* VIEWPORT TAB 3: CODE GENERATOR */}

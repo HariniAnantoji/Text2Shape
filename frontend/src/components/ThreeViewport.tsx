@@ -2,20 +2,25 @@ import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import { MATERIALS } from '../textToShapeData';
-import type { CadParams, MaterialKey } from '../types';
+import type { CadParams, HoleFeature, MaterialKey, PrimitiveFeature } from '../types';
 
 interface ThreeViewportProps {
   cadParams: CadParams;
+  features: PrimitiveFeature[];
+  holes: HoleFeature[];
   stlUrl: string | null;
   materialKey: MaterialKey;
   wireframe: boolean;
   xrayMode: boolean;
   showGrid: boolean;
+  showDimensions: boolean;
   darkMode: boolean;
   onStlLoadError: (detail: string) => void;
 }
 
-function createBaseplatePreview(params: CadParams): THREE.BufferGeometry {
+function createModelPreview(params: CadParams, features: PrimitiveFeature[], holes: HoleFeature[]) {
+  const group = new THREE.Group();
+  const geometries: THREE.BufferGeometry[] = [];
   const shape = new THREE.Shape();
   const halfLength = params.length / 2;
   const halfWidth = params.width / 2;
@@ -34,6 +39,11 @@ function createBaseplatePreview(params: CadParams): THREE.BufferGeometry {
       hole.absarc(x, y, params.holeDiameter / 2, 0, Math.PI * 2, true);
       shape.holes.push(hole);
     }
+    for (const hole of holes) {
+      const customHole = new THREE.Path();
+      customHole.absarc(hole.x - params.x, hole.y - params.y, hole.diameter / 2, 0, Math.PI * 2, true);
+      shape.holes.push(customHole);
+    }
   }
 
   const geometry = new THREE.ExtrudeGeometry(shape, {
@@ -42,17 +52,44 @@ function createBaseplatePreview(params: CadParams): THREE.BufferGeometry {
     bevelEnabled: false,
   });
   geometry.translate(0, 0, -params.thickness / 2);
+  geometry.translate(params.x, params.y, params.z);
   geometry.computeVertexNormals();
-  return geometry;
+  geometries.push(geometry);
+  group.add(new THREE.Mesh(geometry));
+
+  for (const feature of features) {
+    let featureGeometry: THREE.BufferGeometry;
+    if (feature.shape === 'box') {
+      featureGeometry = new THREE.BoxGeometry(feature.length, feature.width, feature.height);
+    } else if (feature.shape === 'cylinder') {
+      featureGeometry = new THREE.CylinderGeometry(
+        feature.diameter / 2,
+        feature.diameter / 2,
+        feature.height,
+        32,
+      );
+      featureGeometry.rotateX(Math.PI / 2);
+    } else {
+      featureGeometry = new THREE.SphereGeometry(feature.diameter / 2, 24, 16);
+    }
+    featureGeometry.translate(feature.x, feature.y, feature.z);
+    geometries.push(featureGeometry);
+    group.add(new THREE.Mesh(featureGeometry));
+  }
+
+  return { group, geometries };
 }
 
 export function ThreeViewport({
   cadParams,
+  features,
+  holes,
   stlUrl,
   materialKey,
   wireframe,
   xrayMode,
   showGrid,
+  showDimensions,
   darkMode,
   onStlLoadError,
 }: ThreeViewportProps) {
@@ -67,9 +104,42 @@ export function ThreeViewport({
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(darkMode ? 0x070a12 : 0xf1f5f9);
 
-    const largestDimension = Math.max(cadParams.length, cadParams.width, cadParams.thickness);
+    const bounds = {
+      minX: cadParams.x - cadParams.length / 2,
+      maxX: cadParams.x + cadParams.length / 2,
+      minY: cadParams.y - cadParams.width / 2,
+      maxY: cadParams.y + cadParams.width / 2,
+      minZ: cadParams.z - cadParams.thickness / 2,
+      maxZ: cadParams.z + cadParams.thickness / 2,
+    };
+    for (const feature of features) {
+      const halfX = feature.shape === 'box' ? feature.length / 2 : feature.diameter / 2;
+      const halfY = feature.shape === 'box' ? feature.width / 2 : feature.diameter / 2;
+      const halfZ = feature.shape === 'box'
+        ? feature.height / 2
+        : feature.shape === 'cylinder'
+          ? feature.height / 2
+          : feature.diameter / 2;
+      bounds.minX = Math.min(bounds.minX, feature.x - halfX);
+      bounds.maxX = Math.max(bounds.maxX, feature.x + halfX);
+      bounds.minY = Math.min(bounds.minY, feature.y - halfY);
+      bounds.maxY = Math.max(bounds.maxY, feature.y + halfY);
+      bounds.minZ = Math.min(bounds.minZ, feature.z - halfZ);
+      bounds.maxZ = Math.max(bounds.maxZ, feature.z + halfZ);
+    }
+    const center = new THREE.Vector3(
+      (bounds.minX + bounds.maxX) / 2,
+      (bounds.minY + bounds.maxY) / 2,
+      (bounds.minZ + bounds.maxZ) / 2,
+    );
+    const largestDimension = Math.max(
+      bounds.maxX - bounds.minX,
+      bounds.maxY - bounds.minY,
+      bounds.maxZ - bounds.minZ,
+    );
     const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, largestDimension * 10);
     camera.position.set(largestDimension * 1.4, largestDimension * 1.2, largestDimension * 1.6);
+    camera.lookAt(0, 0, 0);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(width, height);
@@ -94,7 +164,7 @@ export function ThreeViewport({
         darkMode ? 0x1e293b : 0xe2e8f0,
       );
       gridHelper.rotation.x = Math.PI / 2;
-      gridHelper.position.z = -cadParams.thickness / 2 - 5;
+      gridHelper.position.set(-center.x, -center.y, cadParams.z - cadParams.thickness / 2 - 5 - center.z);
       scene.add(gridHelper);
     }
 
@@ -110,11 +180,21 @@ export function ThreeViewport({
     });
 
     const modelGroup = new THREE.Group();
+    modelGroup.position.copy(center).negate();
     scene.add(modelGroup);
     let active = true;
-    const previewGeometry = createBaseplatePreview(cadParams);
-    const previewMesh = new THREE.Mesh(previewGeometry, meshMaterial);
-    modelGroup.add(previewMesh);
+    const preview = createModelPreview(cadParams, features, holes);
+    preview.group.children.forEach((child) => {
+      if (child instanceof THREE.Mesh) child.material = meshMaterial;
+    });
+    const previewGroup = preview.group;
+    modelGroup.add(previewGroup);
+    let previewDisposed = false;
+    const disposePreview = () => {
+      if (previewDisposed) return;
+      preview.geometries.forEach((previewGeometry) => previewGeometry.dispose());
+      previewDisposed = true;
+    };
 
     if (stlUrl) {
       new STLLoader().load(
@@ -125,9 +205,8 @@ export function ThreeViewport({
             return;
           }
           geometry.computeVertexNormals();
-          geometry.center();
-          modelGroup.remove(previewMesh);
-          previewGeometry.dispose();
+          previewGroup.removeFromParent();
+          disposePreview();
           modelGroup.add(new THREE.Mesh(geometry, meshMaterial));
         },
         undefined,
@@ -138,8 +217,6 @@ export function ThreeViewport({
         },
       );
     }
-
-    camera.lookAt(0, 0, 0);
 
     let isDragging = false;
     let previousMousePosition = { x: 0, y: 0 };
@@ -185,17 +262,37 @@ export function ThreeViewport({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
       window.removeEventListener('resize', handleResize);
-      for (const child of modelGroup.children) {
-        if (child instanceof THREE.Mesh && child.geometry !== previewGeometry) {
-          child.geometry.dispose();
+      disposePreview();
+      modelGroup.traverse((object) => {
+        if (object instanceof THREE.Mesh) {
+          object.geometry.dispose();
         }
-      }
-      previewGeometry.dispose();
+      });
       meshMaterial.dispose();
       renderer.dispose();
+      renderer.forceContextLoss();
       if (container.contains(renderer.domElement)) container.removeChild(renderer.domElement);
     };
-  }, [cadParams, stlUrl, materialKey, wireframe, xrayMode, showGrid, darkMode, onStlLoadError]);
+  }, [cadParams, features, holes, stlUrl, materialKey, wireframe, xrayMode, showGrid, showDimensions, darkMode, onStlLoadError]);
 
-  return <div ref={mountRef} className="w-full h-full cursor-grab active:cursor-grabbing" />;
+  return (
+    <div className="relative h-full w-full">
+      <div ref={mountRef} className="h-full w-full cursor-grab active:cursor-grabbing" />
+      {showDimensions && (
+        <div className="pointer-events-none absolute bottom-4 right-4 max-w-64 rounded-lg border border-cyan-500/30 bg-slate-950/80 p-2 font-mono text-[10px] text-cyan-200">
+          <div>{`PLATE ${cadParams.length} × ${cadParams.width} × ${cadParams.thickness} mm`}</div>
+          <div>{`HOLES 4 × Ø${cadParams.holeDiameter} mm`}</div>
+          {features.map((feature, index) => (
+            <div key={feature.id}>
+              {`${index + 1}: ${feature.shape} ${feature.shape === 'box'
+                ? `${feature.length} × ${feature.width} × ${feature.height}`
+                : feature.shape === 'cylinder'
+                  ? `Ø${feature.diameter} × ${feature.height}`
+                  : `Ø${feature.diameter}`} mm @ ${feature.x}, ${feature.y}, ${feature.z}`}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
