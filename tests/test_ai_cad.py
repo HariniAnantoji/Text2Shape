@@ -146,7 +146,7 @@ class LocalModelClientTests(unittest.TestCase):
         mock_response.__enter__ = lambda response: response
         mock_response.__exit__ = lambda response, *args: None
         with patch.dict("os.environ", {}, clear=True):
-            with patch("ai_cad.urlopen", return_value=mock_response) as urlopen:
+            with patch("cad_plan.urlopen", return_value=mock_response) as urlopen:
                 plan = request_cad_plan("Add a box", BaseplateParams(), [], [])
 
         request = urlopen.call_args.args[0]
@@ -168,12 +168,12 @@ class LocalModelClientTests(unittest.TestCase):
             {},
             BytesIO(b'{"error":"model not found"}'),
         )
-        with patch("ai_cad.urlopen", side_effect=error):
+        with patch("cad_plan.urlopen", side_effect=error):
             with self.assertRaisesRegex(LocalModelError, "model not found"):
                 request_cad_plan("Add a box", BaseplateParams(), [], [])
 
     def test_explains_when_ollama_is_not_running(self):
-        with patch("ai_cad.urlopen", side_effect=ConnectionRefusedError):
+        with patch("cad_plan.urlopen", side_effect=ConnectionRefusedError):
             with self.assertRaisesRegex(LocalModelError, "Could not reach Ollama"):
                 request_cad_plan("Add a box", BaseplateParams(), [], [])
 
@@ -215,7 +215,7 @@ class HostedModelClientTests(unittest.TestCase):
             "LLM_API_KEY": "sk-test-key",
         }
         with patch.dict("os.environ", env, clear=True):
-            with patch("ai_cad.urlopen", return_value=mock_response) as urlopen:
+            with patch("cad_plan.urlopen", return_value=mock_response) as urlopen:
                 plan = request_cad_plan("Add a box", BaseplateParams(), [], [])
 
         request = urlopen.call_args.args[0]
@@ -248,7 +248,7 @@ class HostedModelClientTests(unittest.TestCase):
         fake_boto3.client.return_value = fake_secrets_client
         with patch.dict("os.environ", env, clear=True):
             with patch.dict("sys.modules", {"boto3": fake_boto3}):
-                with patch("ai_cad.urlopen", return_value=mock_response) as urlopen:
+                with patch("cad_plan.urlopen", return_value=mock_response) as urlopen:
                     request_cad_plan("Add a box", BaseplateParams(), [], [])
 
         fake_boto3.client.assert_called_once_with("secretsmanager", region_name="us-east-2")
@@ -258,3 +258,4 @@ class HostedModelClientTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

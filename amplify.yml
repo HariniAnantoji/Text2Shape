@@ -1,0 +1,28 @@
+version: 1
+# AWS Amplify Hosting build spec for the Next.js frontend.
+# The web app lives in the frontend/ subdirectory of this repo.
+#
+# Set this environment variable in the Amplify console (App settings ->
+# Environment variables) so the browser calls your deployed backend:
+#   NEXT_PUBLIC_API_URL = https://api.your-domain.com   (your ALB / API URL)
+#
+# NEXT_PUBLIC_ vars are inlined at build time, so a rebuild is required if it
+# changes.
+applications:
+  - appRoot: frontend
+    frontend:
+      phases:
+        preBuild:
+          commands:
+            - npm ci
+        build:
+          commands:
+            - npm run build
+      artifacts:
+        baseDirectory: .next
+        files:
+          - '**/*'
+      cache:
+        paths:
+          - node_modules/**/*
+          - .next/cache/**/*

@@ -17,7 +17,7 @@ RUN apt-get update \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY ai_cad.py artifact_storage.py cad_generator.py main.py prompt_parser.py ./
+COPY ai_cad.py artifact_storage.py cad_export.py cad_generator.py cad_models.py cad_plan.py main.py prompt_parser.py ./
 
 RUN useradd --create-home --uid 10001 app \
     && mkdir -p /app/downloads /app/downloads/imports \

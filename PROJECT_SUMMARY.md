@@ -134,10 +134,13 @@ backend has been intentionally restarted with the same Ollama configuration.
 | File | Responsibility |
 |---|---|
 | `main.py` | FastAPI endpoints, input validation, CAD-plan execution, artifact URLs |
-| `ai_cad.py` | Ollama request, constrained CAD plan models, validation/application |
-| `cad_generator.py` | build123d geometry and STEP/STL export |
+| `cad_models.py` | Shared Pydantic models (params, features, artifacts) |
+| `cad_plan.py` | LLM request + constrained CAD plan models (local Ollama / hosted Llama) |
+| `ai_cad.py` | CAD plan validation and application to the design state |
+| `cad_generator.py` | build123d solid geometry construction |
+| `cad_export.py` | STEP and STL export (mesh merged into STL only) |
 | `artifact_storage.py` | Local/S3 artifact storage |
-| `prompt_parser.py` | Deterministic prompt interpretation retained from earlier work |
+| `prompt_parser.py` | Deterministic prompt interpretation retained from earlier work (unused by the API) |
 | `frontend/src/app/page.tsx` | Main UI state, chat, API requests, history and code display |
 | `frontend/src/types.ts` | Shared CAD and API types |
 | `frontend/src/components/ThreeViewport.tsx` | 3D preview and STL rendering |

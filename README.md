@@ -1,161 +1,174 @@
 # Text2Shape
-Ai integrated CAD applications you can chat to design.
 
-## Frontend file layout
+A chat-assisted CAD workbench. Describe a part in plain English and Text2Shape
+generates a real, parametric baseplate — previewed in 3D/2D and exported as
+manufacturable **STEP** and **STL** files.
 
-- `frontend/src/app/page.tsx` contains the main app state and workspace layout.
-- `frontend/src/components/ThreeViewport.tsx` owns the Three.js viewport.
-- `frontend/src/components/BlueprintView.tsx` renders the 2D blueprint.
-- `frontend/src/textToShapeData.ts` holds shared prompts, initial chat messages, and material presets.
-- The 3D workbench supports a four-hole baseplate plus positioned box, cylinder, and sphere features. Feature dimensions and positions are in millimeters.
+The language model never runs code. It returns a constrained JSON *plan*; the
+backend validates every operation and builds the geometry itself.
 
-## Python setup
+---
 
-Activate the virtual environment and install project dependencies:
+## How it works
+
+```
+Browser (Next.js)  ──prompt + current design──▶  FastAPI  /generate
+      ▲                                              │
+      │                                              ▼
+      │                                   cad_plan.py  ──▶  LLM (Ollama or hosted)
+      │                                              │   (returns a JSON plan)
+      │                                              ▼
+      │                                   ai_cad.py   (validate + apply plan)
+      │                                              ▼
+      │                                   cad_generator.py  (build123d geometry)
+      │                                              ▼
+      │                                   cad_export.py  (STEP + STL)
+      │                                              ▼
+      └──────artifact URLs────────────  artifact_storage.py  (local disk or S3)
+```
+
+The backend is stateless: every request carries the full design. The browser
+owns the design state and saves projects to `localStorage`.
+
+### Backend modules
+
+| File | Responsibility |
+|---|---|
+| `main.py` | FastAPI endpoints, request validation, artifact URLs |
+| `cad_models.py` | Shared Pydantic models (params, features, artifacts) |
+| `cad_plan.py` | LLM request + constrained CAD-plan models |
+| `ai_cad.py` | Validate and apply a plan to the design state |
+| `cad_generator.py` | build123d solid geometry construction |
+| `cad_export.py` | STEP and STL export |
+| `artifact_storage.py` | Local or S3 artifact storage |
+
+### Frontend
+
+| File | Responsibility |
+|---|---|
+| `src/app/page.tsx` | Main UI state, chat, API calls, history, code view |
+| `src/components/ThreeViewport.tsx` | Three.js 3D preview |
+| `src/components/BlueprintView.tsx` | 2D top-view blueprint |
+| `src/hooks/useSavedProjects.ts` | Save/load/export projects via `localStorage` |
+| `src/types.ts` | Shared TypeScript types |
+
+---
+
+## Quick start (local)
+
+You need **Python 3.11+**, **Node 18+**, and **Ollama**.
+
+**1. Ollama** — install from [ollama.com/download](https://ollama.com/download),
+then pull the model:
+
+```powershell
+ollama pull qwen2.5:7b
+```
+
+**2. Backend** — from the project root:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
+$env:CORS_ORIGINS = "http://localhost:3000"
+python -m uvicorn main:app --port 8000 --reload
 ```
 
-Add Python packages to `requirements.txt` as the project needs them.
-
-## Run the API
-
-Start the API from `Text2Shape`:
-
-```sh
-python -m uvicorn main:app --reload
-```
-
-## Build the backend container
-
-The backend image can be built from the repository root with Docker:
+**3. Frontend** — in a second terminal:
 
 ```powershell
-docker build -t text2shape-api .
-docker run --rm -p 8000:8000 text2shape-api
-```
-
-The API will be available at `http://localhost:8000`. The current backend
-uses local artifact storage unless S3 is configured. Container-local files
-are not durable across task replacement, so configure S3 before deploying to
-ECS.
-
-In another terminal, start the frontend:
-
-```sh
 cd frontend
 npm install
+$env:NEXT_PUBLIC_API_URL = "http://localhost:8000"
 npm run dev
 ```
 
-The frontend sends prompts to `http://localhost:8000/generate` by default. To
-use the ECS API from local development, set its current public endpoint before
-starting Next.js:
+Open [http://localhost:3000](http://localhost:3000). The first model response is
+slow while Ollama loads; later ones are fast.
 
-```powershell
-$env:NEXT_PUBLIC_API_URL = "http://<current-ecs-task-public-ip>:8000"
-npm run dev
-```
+> Tip: `.\demo.ps1` starts both servers and opens the app in one command.
 
-Replace the placeholder with the current task public IP from ECS. Do not commit
-the endpoint to source control; it can change when ECS replaces the task. The
-backend allows `http://localhost:3000` by default. To allow a different
-frontend origin, configure the backend's `CORS_ORIGINS` environment variable
-as a comma-separated list of exact origins (for example,
-`https://your-frontend.example.com`) and deploy a new image. Never use `*` for
-a public deployment.
+---
 
-`POST /generate` accepts a prompt and optional baseplate parameters. The
-response contains validated parameters and a `files` object with URLs for the
-generated STL and STEP files:
+## Using it
+
+Type requests in the chat. Be explicit about dimensions and coordinates for
+reliable placement. Examples:
+
+- `Create a 100 x 60 mm baseplate with 6 mm corner holes`
+- `Add a 30 x 20 x 10 mm box on top`
+- `Add a 6 mm hole at x 0 y 0`
+- `Move feature 1 to x 25`
+- `Scale feature 1 by 1.5`
+
+The workbench supports: baseplate dimensions and its four corner holes,
+additional through-holes, box/cylinder/sphere primitives (add, move, resize,
+scale), importing an STL mesh, material presets, revision history, and saving
+or exporting projects. Ambiguous requests get a clarification instead of
+bad geometry.
+
+An imported STL is a faceted mesh: it can be moved or uniformly scaled and is
+merged into the **STL** export. The **STEP** export stays solid (baseplate +
+primitives), because a mesh is not a B-rep solid.
+
+---
+
+## API
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/` | Health check (`{"status":"ok"}`) |
+| `POST` | `/generate` | Build a model from a prompt + current design |
+| `POST` | `/imports` | Upload an STL (raw body, `X-Filename` header) |
+| `GET` | `/imports/{id}` | Fetch an uploaded STL |
+| `GET` | `/artifacts/{id}/{file}` | Download a generated STEP/STL |
+
+Example:
 
 ```sh
 curl -X POST http://127.0.0.1:8000/generate \
   -H "Content-Type: application/json" \
-  -d '{"prompt":"Create a 100 x 60 mm baseplate with 6 mm holes","cad_params":{"length":100,"width":60,"thickness":8,"hole_diameter":6,"edge_offset":10}}'
+  -d '{"prompt":"Create a 100 x 60 mm baseplate with 6 mm holes"}'
 ```
 
-The baseplate parameters also accept a center position (`x`, `y`, `z`, in
-millimeters), defaulting to zero. Its four-hole pattern moves with the plate.
-The request may also include up to 20 additive primitive features. Each
-feature has an `id`, a `shape` (`box`, `cylinder`, or `sphere`), and a center
-position (`x`, `y`, `z`, in millimeters). Boxes use `length`, `width`, and
-`height`; cylinders use `diameter` and `height`; spheres use `diameter`.
-In the workbench, use the baseplate position fields and each primitive's
-position/dimension fields to move and resize the model before generating new
-STEP and STL files.
+Interactive docs are at `/docs`.
 
-Chat requests are interpreted by a local Ollama model into a constrained CAD
-plan. The backend validates each operation and generates geometry itself;
-model output is never executed as code. The MVP supports
-baseplate dimensions and its four corner holes, additional through-holes,
-adding/removing box, cylinder, and sphere primitives, positioning them, and
-resizing or uniformly scaling existing primitives. Ambiguous requests return
-a clarification instead of changing the design. Generated files are served
-through restricted `/artifacts/` URLs. The frontend loads the STL in the 3D
-viewport and provides a STEP download link.
+---
 
-Examples to type in the chat include “add a 30 × 20 × 10 mm box on top,”
-“drill a 6 mm hole at x 0 y 0,” “move feature 1 to x 25,” and “scale feature 1
-by 1.5.” Include dimensions and position when you have a specific placement in
-mind. The assistant asks for clarification when the target or request is
-ambiguous.
+## Configuration
 
-Install Ollama for Windows from [ollama.com/download](https://ollama.com/download),
-then open a new PowerShell terminal and download the local model:
+All configuration is via environment variables. Everything is **local by
+default** — set these only to opt into cloud features.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `CORS_ORIGINS` | `http://localhost:3000` | Allowed frontend origins (comma-separated; never `*`) |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Local Ollama host |
+| `OLLAMA_MODEL` | `qwen2.5:7b` | Local model name |
+| `LLM_BASE_URL` | _(unset)_ | Hosted OpenAI-compatible endpoint; when set, Ollama is bypassed |
+| `LLM_MODEL` | `meta-llama/Llama-3.1-8B-Instruct-Turbo` | Hosted model name |
+| `LLM_API_KEY` | _(unset)_ | Hosted-LLM key (or inject from a secret) |
+| `LLM_API_KEY_SECRET_ARN` | _(unset)_ | Fetch the key from AWS Secrets Manager at runtime |
+| `S3_BUCKET_NAME` | _(unset)_ | Store artifacts in S3; otherwise local `downloads/` |
+| `AWS_REGION` | _(unset)_ | Required when `S3_BUCKET_NAME` is set |
+
+Copy `.env.example` to `.env` for local setup. Never commit real keys.
+
+---
+
+## Tests
 
 ```powershell
-ollama pull qwen2.5:7b
-ollama run qwen2.5:7b
+.\.venv\Scripts\python.exe -m pytest tests/
 ```
 
-Ollama runs the model on your computer; no Hugging Face token or per-request
-inference API is used. Keep Ollama running while using Text2Shape. In another
-terminal, start the backend and frontend as described above. The backend uses
-`qwen2.5:7b` at `http://localhost:11434` by default. Set `OLLAMA_MODEL` to a
-different model name or `OLLAMA_BASE_URL` to a different Ollama host if needed.
-The 7B model download is several gigabytes and inference speed depends on your
-computer. For ECS deployment, Ollama must be hosted on a machine reachable by
-the backend; a local Windows Ollama installation is only available to local
-development.
+---
 
-To store artifacts in a private S3 bucket, set these variables for the API:
+## Deploying
 
-```text
-S3_BUCKET_NAME=text2shape-cad-artifacts-2026
-AWS_REGION=us-east-2
-```
+The app is designed to run locally; deployment is optional. To run it in the
+cloud (ECS Fargate backend, S3 storage, Secrets Manager key, Amplify/Vercel
+frontend), see [`deploy/README.md`](deploy/README.md).
 
-When `S3_BUCKET_NAME` is unset, the API stores files locally for development.
-When it is set, the API uploads generated files to S3 and streams downloads
-through the API; the bucket does not need public access or browser CORS rules.
-The AWS SDK uses its standard credential chain. For ECS, assign the task a
-dedicated task role limited to `s3:PutObject` and `s3:GetObject` on
-`arn:aws:s3:::text2shape-cad-artifacts-2026/*`. Do not put AWS access keys in
-the image or repository.
-Local browser requests are allowed from `http://localhost:3000` by default.
-
-## Baseplate CAD tests
-
-The API uses `cad_generator.py` to create the baseplate with four through-holes
-and export STEP and STL files. Run its focused tests from the project root with:
-
-```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s tests
-```
-
-## Environment variables and API keys
-
-Never commit `.env` or real API keys to GitHub. Create your local `.env` by
-copying `.env.example`, then fill in the required variables:
-
-```powershell
-Copy-Item .env.example .env
-```
-
-Commit only `.env.example`, containing variable names and placeholder values,
-not secrets. Each collaborator should get their own API key from the service
-provider and store it in their local `.env`. If a key must be shared, use an
-approved secrets manager or another secure channel, not GitHub or chat.
+> Note: cloud containers cannot reach a local Ollama. For cloud deployment,
+> point `LLM_BASE_URL` at a hosted provider (Together AI, Groq, Fireworks).

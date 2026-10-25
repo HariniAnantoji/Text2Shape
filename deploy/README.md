@@ -1,6 +1,45 @@
 # Deploying Text2Shape to AWS
 
-This guide covers the two things you asked about:
+## The big picture: where each piece goes
+
+Text2Shape has three parts, each with a natural home:
+
+| Part | Deploy to | Notes |
+|---|---|---|
+| **Backend** (FastAPI + build123d) | **ECS Fargate** behind an **Application Load Balancer** | Must be a container: build123d needs the OpenCascade native libraries (already in the `Dockerfile`). No Lambda/serverless path. |
+| **Frontend** (Next.js) | **AWS Amplify Hosting** (see `amplify.yml`) or **Vercel** | Set `NEXT_PUBLIC_API_URL` to the backend's ALB URL at build time. |
+| **CAD artifacts** | **S3** (private bucket) | Backend already supports it; downloads stream through the API. |
+| **LLM API key** | **Secrets Manager** | Injected into the backend; see below. |
+| **LLM itself** | **Hosted provider** (Together AI / Groq / Fireworks) | Cloud containers can't reach your local Ollama. Set `LLM_BASE_URL` + `LLM_MODEL`. |
+
+Recommended order: (1) create S3 bucket + LLM secret, (2) deploy the backend to
+ECS and get its ALB URL, (3) deploy the frontend with `NEXT_PUBLIC_API_URL` set
+to that URL, (4) set the backend's `CORS_ORIGINS` to the frontend's final URL.
+
+Health check: the ALB target group should health-check `GET /`, which returns
+`{"status":"ok"}`.
+
+---
+
+## Frontend (AWS Amplify)
+
+1. In the Amplify console, connect this repo. Amplify auto-detects `amplify.yml`
+   (which builds the `frontend/` subdirectory).
+2. Under **App settings -> Environment variables**, add:
+   `NEXT_PUBLIC_API_URL = https://api.your-domain.com` (your ALB/API URL).
+3. Deploy. Amplify gives you a URL like `https://main.xxxx.amplifyapp.com`
+   (attach a custom domain if you have one).
+4. Put that frontend URL into the backend's `CORS_ORIGINS` and redeploy the
+   backend task.
+
+(Prefer Vercel? Import the repo, set **Root Directory** to `frontend`, add the
+same `NEXT_PUBLIC_API_URL` env var, deploy.)
+
+---
+
+## Backend details
+
+This section covers the two backend specifics:
 
 1. Storing generated CAD files in your S3 bucket.
 2. Storing the hosted LLM API key as an AWS secret so the backend runs in the
